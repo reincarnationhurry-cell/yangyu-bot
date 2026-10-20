@@ -641,7 +641,8 @@ export async function listSessions() {
   }));
   const cards = await userCards(list.map((s) => s.talkerId));
   for (const s of list) {
-    s.name = cards[s.talkerId]?.name || '';
+    s.name = cards[s.talkerId]?.name || SYSTEM_TALKERS[s.talkerId] || '';
+    s.system = !!SYSTEM_TALKERS[s.talkerId];
     s.face = cards[s.talkerId]?.face || '';
   }
   return list;
@@ -672,6 +673,7 @@ export async function listMessages(talkerId, size = 30) {
   return (r.data?.messages || [])
     .map((m) => ({
       msgKey: String(m.msg_key || ''),
+      seqno: Number(m.msg_seqno || 0),
       from: String(m.sender_uid || ''),
       to: String(m.receiver_id || ''),
       mine: String(m.sender_uid) === String(me),
@@ -682,6 +684,24 @@ export async function listMessages(talkerId, size = 30) {
     }))
     .sort((a, b) => (a.ts || 0) - (b.ts || 0));
 }
+
+// ─── 私信：标记已读 ────────────────────────────────────────
+// 坑：只拉消息不算已读，B站那边的未读数会一直挂着。网页版点开会话时会调这个接口，
+// ack_seqno 填这个会话里最大的 msg_seqno。
+export async function markSessionRead(talkerId, ackSeqno) {
+  const ck = loadCookie();
+  let seq = Number(ackSeqno || 0);
+  if (!seq) seq = Math.max(0, ...(await listMessages(talkerId, 20)).map((m) => m.seqno));
+  await jpost(
+    'https://api.vc.bilibili.com/session_svr/v1/session_svr/update_ack',
+    { talker_id: String(talkerId), session_type: '1', ack_seqno: String(seq), build: '0', mobi_app: 'web', csrf_token: ck.bili_jct },
+    { referer: 'https://message.bilibili.com/', origin: 'https://message.bilibili.com' },
+  );
+  return { ok: true };
+}
+
+// 官方系统号不是普通用户，user/cards 查不到名字
+const SYSTEM_TALKERS = { '844424930131964': 'B站官方通知' };
 
 // ─── 私信：发送 ────────────────────────────────────────────
 // 坑：这个接口要 Wbi 签名（w_sender_uid / w_receiver_id / w_dev_id），

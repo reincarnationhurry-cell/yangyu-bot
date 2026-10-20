@@ -516,10 +516,10 @@ async function pageAutopilot(main) {
         <p>任意 OpenAI 兼容接口，默认 DeepSeek 官方。Key 只存在本机 <code>panel/data/secrets.json</code>，不会进 git、也不会传回页面。</p>
         <div class="cfg-grid">
           <div><label class="f">接口地址</label><input data-path="llm.baseUrl" value="${esc(c.llm.baseUrl)}"></div>
-          <div><label class="f">模型名</label><input data-path="llm.model" value="${esc(c.llm.model)}"></div>
+          <div><label class="f">模型名</label><input data-path="llm.model" list="modelList" value="${esc(c.llm.model)}" autocomplete="off"><datalist id="modelList"></datalist><div class="hint">DeepSeek 官方填 deepseek-chat；本地网关一般是「提供方/模型」</div></div>
           <div><label class="f">API Key</label><input type="password" id="llmKey" placeholder="${ap.hasKey ? '已保存（留空不改）' : 'sk-…'}" autocomplete="off"></div>
         </div>
-        <div class="row" style="margin-top:10px"><button class="btn sm" id="llmTest" ${ap.hasKey ? '' : 'disabled'}>测试连通</button></div>
+        <div class="row" style="margin-top:10px"><button class="btn sm" id="llmModels">列出可用模型</button><button class="btn sm" id="llmTest">测试连通</button><span class="small muted" id="llmMsg"></span></div>
       </div>
       <div class="cfg-sec">
         <h3>风控</h3>
@@ -587,7 +587,21 @@ async function pageAutopilot(main) {
   $('#saveCfg').onclick = (e) => busy(e.target, async () => { await save(); toast('设置已保存'); route(); });
   $('[data-path="enabled"]', main).onchange = (e) => busy(null, async () => { await save({ enabled: e.target.checked }); toast(e.target.checked ? '自动养号已打开' : '已关闭'); route(); });
   $('#replan').onclick = (e) => busy(e.target, async () => { await save(); await api('/api/autopilot/replan', {}); toast('重新抽好了'); route(); });
-  $('#llmTest').onclick = (e) => busy(e.target, async () => { const r = await api('/api/autopilot/llm-test', {}); toast('模型回复：' + r.reply); });
+  // 测试前先保存，测的就是框里现在填的
+  $('#llmTest').onclick = (e) => busy(e.target, async () => {
+    await save();
+    const r = await api('/api/autopilot/llm-test', {});
+    $('#llmMsg').textContent = '✓ 连上了，模型回复：' + r.reply;
+    toast('模型连上了');
+  });
+  $('#llmModels').onclick = (e) => busy(e.target, async () => {
+    await save();
+    const { models } = await api('/api/autopilot/llm-models', {});
+    $('#modelList').innerHTML = models.map((m) => `<option value="${esc(m)}">`).join('');
+    $('#llmMsg').textContent = models.length ? `有 ${models.length} 个模型，点「模型名」输入框就能选` : '接口没返回模型列表，只能手填';
+    const inp = $('[data-path="llm.model"]', main);
+    if (models.length && !models.includes(inp.value.trim())) { inp.value = ''; inp.focus(); }
+  });
   const un = $('#unlockCoin');
   if (un) un.onclick = async () => {
     if (!(await confirmBox('解锁投币？', '之前接口投币失败过。解锁后如果再失败会自动重新上锁。\n建议先在浏览器里确认这个号投币正常，再解锁。', '解锁'))) return;
@@ -752,6 +766,20 @@ async function openVideo(bvid) {
 }
 
 // ─── 消息 ──────────────────────────────────────────────────
+async function refreshUnread() {
+  try {
+    const u = await api('/api/inbox/unread');
+    S.badges.inbox = (u.reply || 0) + (u.at || 0) + (u.dm || 0);
+    renderNav();
+    $$('#inSeg button').forEach((b) => {
+      const n = u[b.dataset.v] || 0;
+      const badge = $('.badge', b);
+      if (!n && badge) badge.remove();
+      else if (n && badge) badge.textContent = n;
+    });
+  } catch { /* ignore */ }
+}
+
 async function pageInbox(main) {
   const tab = (S.inTab ||= 'reply');
   const u = await api('/api/inbox/unread').catch(() => ({}));
@@ -767,6 +795,7 @@ async function pageInbox(main) {
   out.innerHTML = '<div class="card"><div class="empty">加载中…</div></div>';
   try {
     const r = await api('/api/inbox/' + tab);
+    refreshUnread();
     if (!r.list.length) { out.innerHTML = '<div class="card"><div class="empty"><span class="fish">📭</span>还没有消息</div></div>'; return; }
     if (tab === 'like') {
       out.innerHTML = `<div class="card">${r.list.map((x) => `<div class="cmt"><img class="av" src="${esc(img(x.face, '68w_68h'))}" alt="" onerror="this.style.visibility='hidden'">
@@ -803,6 +832,7 @@ async function renderDm(out) {
     <div class="dm-pane"><div class="dm-msgs" id="dmMsgs"><div class="empty">选一个会话</div></div>
       <div class="dm-input"><textarea id="dmIn" placeholder="回复私信…（Enter 发送，Shift+Enter 换行）"></textarea>
         <div style="display:flex;flex-direction:column;gap:6px"><button class="btn sm" id="dmAi">✨</button><button class="btn primary" id="dmSend">发送</button></div></div></div></div>
+    <div class="row" style="margin-top:8px"><button class="btn sm" id="dmReadAll">全部标为已读</button><span class="spacer"></span></div>
     <div class="hint" style="margin-top:8px">⚠️ 私信是直接对陌生人说话，发出去收不回。广告、引流、奇怪搭讪别回。</div>`;
   let cur = null, sessions = [];
   const openS = async (s) => {
@@ -820,16 +850,34 @@ async function renderDm(out) {
         return `${sep}<div class="bubble ${m.mine ? 'me' : ''}"><div>${esc(m.text)}</div></div>`;
       }).join('') || '<div class="empty">还没有消息</div>';
       box.scrollTop = box.scrollHeight;
+      if (s.unread) {
+        const seqno = Math.max(0, ...r.list.map((m) => m.seqno || 0));
+        await api('/api/messages/read', { talkerId: s.talkerId, seqno }).catch(() => {});
+        s.unread = 0;
+        $(`.dm-item[data-id="${s.talkerId}"] .badge`)?.remove();
+        refreshUnread();
+      }
     } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   };
   try {
     sessions = (await api('/api/messages/sessions')).list;
     $('#dmList').innerHTML = sessions.length ? sessions.map((s) => `<div class="dm-item" data-id="${esc(s.talkerId)}">
       <img src="${esc(img(s.face, '80w_80h'))}" alt="" onerror="this.style.visibility='hidden'">
-      <div style="min-width:0"><div class="n">${esc(s.name || 'UID ' + s.talkerId)}</div><div class="l">${esc(s.lastMsg)}</div></div>
+      <div style="min-width:0"><div class="n">${esc(s.name || 'UID ' + s.talkerId)}${s.system ? ' <span class="chip">系统</span>' : ''}</div><div class="l">${esc(s.lastMsg)}</div></div>
       <div style="text-align:right"><div class="small muted">${s.time ? ago(s.time) : ''}</div>${s.unread ? `<span class="badge">${s.unread}</span>` : ''}</div></div>`).join('') : '<div class="empty">没有私信</div>';
     $('#dmList').onclick = (e) => { const it = e.target.closest('.dm-item'); if (it) openS(sessions.find((s) => s.talkerId === it.dataset.id)); };
   } catch (e) { $('#dmList').innerHTML = `<div class="err" style="padding:14px">${esc(e.message)}</div>`; }
+  $('#dmReadAll').onclick = (e) => busy(e.target, async () => {
+    const unread = sessions.filter((s) => s.unread);
+    if (!unread.length) return toast('没有未读私信');
+    for (const s of unread) {
+      await api('/api/messages/read', { talkerId: s.talkerId });
+      s.unread = 0;
+      $(`.dm-item[data-id="${s.talkerId}"] .badge`)?.remove();
+    }
+    toast(`${unread.length} 个会话已标为已读`);
+    refreshUnread();
+  });
   const send = (btn) => busy(btn, async () => {
     if (!cur) throw new Error('先选一个会话');
     const t = $('#dmIn').value.trim();

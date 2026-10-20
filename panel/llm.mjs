@@ -21,21 +21,56 @@ export function llmReady() {
   return !!readSecrets().llmApiKey;
 }
 
-async function chat(messages, { maxTokens = 300, temperature = 0.9 } = {}) {
-  const cfg = readConfig().llm;
+function endpoint(path) {
+  const base = String(readConfig().llm.baseUrl || '').replace(/\/+$/, '');
+  return /\/v\d+$/.test(base) ? `${base}${path}` : `${base}/v1${path}`;
+}
+
+function authHeaders() {
   const key = readSecrets().llmApiKey;
   if (!key) throw new Error('没配置模型 API Key（面板 → 自动养号 → 模型设置）');
-  const base = String(cfg.baseUrl || '').replace(/\/+$/, '');
-  const url = /\/v\d+$/.test(base) ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: cfg.model, messages, max_tokens: maxTokens, temperature }),
-    signal: AbortSignal.timeout(60000),
-  });
+  return { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` };
+}
+
+/** 把常见报错翻成人话，别只甩一句英文 */
+function explain(status, msg) {
+  const m = String(msg || '');
+  if (/provider\/model/i.test(m)) return `模型名格式不对：这个接口要「提供方/模型」的写法（例如 buddy/deepseek-v4.1-flash），点「列出可用模型」直接选一个`;
+  if (status === 401 || /unauthor|invalid.*key|api key/i.test(m)) return 'API Key 不对或已失效';
+  if (status === 404) return `接口地址不对（${m || '404'}），检查一下「接口地址」`;
+  if (/model.*(not|exist|found)/i.test(m)) return `没有这个模型：${m}。点「列出可用模型」看看有哪些`;
+  return m || `HTTP ${status}`;
+}
+
+async function chat(messages, { maxTokens = 300, temperature = 0.9 } = {}) {
+  const cfg = readConfig().llm;
+  let res;
+  try {
+    res = await fetch(endpoint('/chat/completions'), {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ model: String(cfg.model || '').trim(), messages, max_tokens: maxTokens, temperature }),
+      signal: AbortSignal.timeout(60000),
+    });
+  } catch (e) {
+    throw new Error(`连不上模型接口（${e.cause?.code || e.message}），检查地址，或者对应的服务有没有在跑`);
+  }
   const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`模型接口报错：${j.error?.message || res.status}`);
+  if (!res.ok) throw new Error(`模型接口报错：${explain(res.status, j.error?.message || j.message)}`);
   return String(j.choices?.[0]?.message?.content || '').trim();
+}
+
+/** 列出接口支持的模型（OpenAI 兼容的 GET /models） */
+export async function listModels() {
+  let res;
+  try {
+    res = await fetch(endpoint('/models'), { headers: authHeaders(), signal: AbortSignal.timeout(15000) });
+  } catch (e) {
+    throw new Error(`连不上模型接口（${e.cause?.code || e.message}）`);
+  }
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`列模型失败：${explain(res.status, j.error?.message || j.message)}`);
+  return (j.data || []).map((m) => String(m.id)).filter(Boolean).sort();
 }
 
 /** 输出安全闸：不合格就返回 null，宁可不发 */

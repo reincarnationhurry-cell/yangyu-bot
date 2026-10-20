@@ -190,6 +190,7 @@ const routes = {
     return autopilotView();
   },
   'POST /api/autopilot/llm-test': async () => ({ ok: true, reply: await llm.ping() }),
+  'POST /api/autopilot/llm-models': async () => ({ models: await llm.listModels() }),
   'POST /api/coin/unlock': async () => {
     bili.unlockCoin();
     logAction({ kind: 'autopilot', detail: '手动解锁了投币' });
@@ -256,14 +257,20 @@ const routes = {
 
   // 消息中心
   'GET /api/inbox/unread': async () => cached('unread', 30_000, bili.unreadCounts),
-  'GET /api/inbox/reply': async () => ({ list: await cached('replyFeed', 30_000, bili.replyFeed) }),
-  'GET /api/inbox/at': async () => ({ list: await cached('atFeed', 30_000, bili.atFeed) }),
-  'GET /api/inbox/like': async () => ({ list: await cached('likeFeed', 60_000, bili.likeFeed) }),
+  'GET /api/inbox/reply': async () => { const list = await cached('replyFeed', 30_000, bili.replyFeed); bust('unread'); return { list }; },
+  'GET /api/inbox/at': async () => { const list = await cached('atFeed', 30_000, bili.atFeed); bust('unread'); return { list }; },
+  'GET /api/inbox/like': async () => { const list = await cached('likeFeed', 60_000, bili.likeFeed); bust('unread'); return { list }; },
   'GET /api/messages/sessions': async () => ({ list: await cached('sessions', 20_000, bili.listSessions) }),
   'GET /api/messages/list': async (q) => {
     const talkerId = q.get('talkerId');
     if (!talkerId) throw new Error('缺 talkerId');
     return { list: await bili.listMessages(talkerId) };
+  },
+  'POST /api/messages/read': async (_q, b) => {
+    if (!b.talkerId) throw new Error('缺 talkerId');
+    await bili.markSessionRead(b.talkerId, b.seqno);
+    bust('sessions', 'unread');
+    return { ok: true };
   },
   'POST /api/messages/send': async (_q, b) => {
     if (!b.uid || !b.text) throw new Error('缺 uid 或 text');

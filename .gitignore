@@ -1,0 +1,19 @@
+# ── 凭证：绝不能进版本库 ──
+bilibili-mcp/login/
+**/cookie.json
+panel/data/secrets.json
+
+# ── 运行数据（动作日志、任务、计划、设备标识、日志）──
+panel/data/
+diary/data/
+
+# ── 依赖 / 系统 ──
+node_modules/
+.DS_Store
+*.log
+*.tmp
+
+# ── 个人素材 ──
+# 角色参考图来源不明的话别公开；生成的语音样例也不需要
+stickers/_ref/
+tts/*.mp4

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- B站图床会按 Referer 防盗链，不带 Referer 才能正常显示封面和头像 -->
+<meta name="referrer" content="no-referrer">
+<title>养鱼面板</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐟</text></svg>">
+<link rel="stylesheet" href="/style.css">
+<script>
+  try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+</script>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="brand-logo"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 12c3-5 9-6 13-3l4-3v12l-4-3c-4 3-10 2-13-3z" fill="#fff"/><circle cx="8" cy="11" r="1.2" fill="#2f6cf6"/></svg></div>
+      <div><b>蓝色大肥鱼</b><span>B站养鱼面板</span></div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="side-foot">
+      <span id="footStatus">·</span>
+      <button class="theme-btn" id="themeBtn" title="切换深浅色">◐</button>
+    </div>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+<nav class="mobile-nav" id="mnav"></nav>
+
+<div class="drawer-mask" id="drawerMask"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-h"><b id="drawerTitle">视频</b><span class="spacer"></span><button class="btn ghost sm" id="drawerClose">关闭</button></div>
+  <div class="drawer-b" id="drawerBody"></div>
+</aside>
+
+<div class="modal-mask" id="modal"><div class="modal"><h3 id="modalTitle"></h3><p id="modalText"></p>
+  <div class="row" style="justify-content:flex-end"><button class="btn" id="modalNo">算了</button><button class="btn primary" id="modalYes">确定</button></div></div></div>
+<div class="tip" id="tip"></div>
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

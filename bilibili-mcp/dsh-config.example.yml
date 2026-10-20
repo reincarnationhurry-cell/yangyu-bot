@@ -1,0 +1,21 @@
+# DeepSeek Harness（DSH）里接入本目录 MCP 服务的配置示例。
+# 追加到 ~/.dsh/profiles/<profile>/cordis.patch.yml，把 <QQ_BOT_DIR> 换成本仓库的绝对路径。
+# 注意：这是「新增」插件，必须用 insert: 形式。
+- insert:
+    - id: mcp-bilibili
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: bilibili
+        transport: stdio
+        command: node
+        args:
+          - <QQ_BOT_DIR>/bilibili-mcp/node_modules/bilibili-mcp-server/dist/index.js
+        cwd: <QQ_BOT_DIR>/bilibili-mcp
+        env:
+          # 'true' = 服务端只读闸门（写工具不进 tools/list）；给机器人专用号放开写操作时改成 'false'
+          BILIBILI_MCP_READONLY: 'true'
+          BILIBILI_AUTO_REFRESH: 'false'
+          # 扫码登录后 cookie 落盘位置（已在 .gitignore 里）
+          BILIBILI_COOKIE_FILE: <QQ_BOT_DIR>/bilibili-mcp/login/cookie.json
+        toolCallTimeoutMs: 90000
+        failOnStartupError: false

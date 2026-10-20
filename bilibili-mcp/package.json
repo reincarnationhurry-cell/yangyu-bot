@@ -1,0 +1,10 @@
+{
+  "name": "qq-bot-bilibili-mcp",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local vendored bilibili-mcp-server with anonymous WBI fix",
+  "dependencies": {
+    "bilibili-mcp-server": "1.2.0",
+    "qrcode": "^1.5.4"
+  }
+}

@@ -240,17 +240,18 @@ async function pageOverview(main) {
     `<div class="grid g-4">${acctCard}${expCard}</div>
      <div style="height:16px"></div>${stats}<div style="height:16px"></div>
      <div class="grid g-3">
-       <div class="card span-2" id="apCard"></div>
+       <div class="span-2 grid">
+         <div class="card" id="apCard"></div>
+         <div class="card"><div class="card-h"><h2>近 14 天看视频数</h2><span class="small muted">鼠标移上去看当天明细</span></div><div id="ovChart" class="chart"></div></div>
+       </div>
        <div class="card"><div class="card-h"><h2>最近动态</h2><a href="#/activity" class="small">全部 →</a></div><div id="ovRecent"></div></div>
-     </div>
-     <div style="height:16px"></div>
-     <div class="card"><div class="card-h"><h2>近 14 天看视频数</h2><span class="small muted">鼠标移上去看当天明细</span></div><div id="ovChart" class="chart"></div></div>`;
+     </div>`;
 
   $('#ovRefresh').onclick = () => route();
   renderApCard($('#apCard'), ap);
   renderChart($('#ovChart'), ov.series);
-  const r = await api('/api/actions?limit=8').catch(() => ({ list: [] }));
-  $('#ovRecent').innerHTML = r.list.length ? `<ul class="tl">${r.list.map((x) => tlItem(x, true)).join('')}</ul>` : '<div class="empty">还没有动作</div>';
+  const r = await api('/api/actions?limit=6').catch(() => ({ list: [] }));
+  $('#ovRecent').innerHTML = r.list.length ? `<ul class="tl compact">${r.list.map((x) => tlItem(x, true)).join('')}</ul>` : '<div class="empty">还没有动作</div>';
 }
 
 function oneTimeTips(x) {

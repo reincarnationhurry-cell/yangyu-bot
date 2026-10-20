@@ -89,7 +89,7 @@ img { display: block; }
 .page-head h1 { margin: 0; font-size: 22px; letter-spacing: -.01em; }
 .page-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 
-.grid { display: grid; gap: 16px; }
+.grid { display: grid; gap: 16px; align-items: start; }
 .g-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .g-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .g-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -223,6 +223,8 @@ label.f { display: block; font-size: 12px; color: var(--text2); margin-bottom: 5
 .tl .body .x { word-break: break-word; }
 .tl .body .m { font-size: 12px; color: var(--muted); margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .tl li.bad .x { color: var(--red); }
+.tl.compact .x { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl.compact li { padding: 6px 4px; }
 .ico.watch { background: var(--blue-soft); } .ico.like { background: var(--pink-soft); } .ico.comment, .ico.reply_comment { background: var(--violet-soft); }
 .ico.share { background: var(--green-soft); } .ico.coin { background: var(--amber-soft); } .ico.error, .ico.cooldown { background: var(--red-soft); }
 .ico.session_start, .ico.session_end { background: var(--card2); }

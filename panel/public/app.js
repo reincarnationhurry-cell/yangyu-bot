@@ -111,6 +111,7 @@ const KIND = {
   feed: ['🏠', '刷推荐'], hot: ['🔥', '看热门'], task: ['📋', '派任务'], task_done: ['✅', '完成任务'],
   session_start: ['🐟', '开始刷'], session_end: ['🏁', '刷完了'], draft: ['📝', '起草'], diary: ['📔', '发日记'],
   cooldown: ['🧊', '风控冷却'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
+  login: ['🔑', '登录'], notify: ['📮', 'QQ 提醒'], favorite: ['⭐', '收藏'], vip_new: ['🌟', '特别关注更新'], dyn_like: ['👍', '动态点赞'], vip: ['🌟', '特别关注'], follow: ['➕', '关注'],
 };
 const SOURCE = { auto: ['自动', 'blue'], panel: ['面板', 'violet'], bot: ['QQ里的她', 'pink'] };
 
@@ -158,7 +159,8 @@ async function loadOverview() {
   S.badges.inbox = (u.reply || 0) + (u.at || 0) + (u.dm || 0);
   S.badges.review = S.ov.reviewPending || 0;
   const ap = S.ov.autopilot;
-  $('#footStatus').innerHTML = ap.live.running
+  renderLoginBanner(S.ov.account);
+  $('#footStatus').innerHTML = S.ov.account && !S.ov.account.loggedIn ? '<a href="#" id="footLogin" style="color:var(--red)">⚠️ 掉登录了 · 扫码</a>' : ap.live.running
     ? '<span class="pulse"></span> 她正在刷B站'
     : ap.config.enabled ? '自动养号 · 开' : '自动养号 · 关';
   renderNav();
@@ -194,8 +196,11 @@ async function pageOverview(main) {
   const todayS = ov.series[ov.series.length - 1] || {};
   const pct = a.expNext && a.expNext > 0 ? Math.min(100, ((a.exp - a.expMin) / (a.expNext - a.expMin)) * 100) : 100;
 
-  const acctCard = a.error
-    ? `<div class="card span-2"><div class="err">B站账号连不上：${esc(a.error)}</div><div class="hint">cookie 可能过期了，需要重新扫码登录（见 README「登录」）。</div></div>`
+  const acctCard = a.error || !a.loggedIn
+    ? `<div class="card span-2"><div class="hero"><div class="avatar" style="display:grid;place-items:center;font-size:32px">🔑</div>
+        <div><h2>B站 掉登录了</h2>
+        <div class="small muted">${a.error ? '账号连不上：' + esc(a.error) : '改密码、改密保、异地登录之后，B站 会让旧的登录失效。'}自动养号会停着，扫个码就好。</div>
+        <div class="row" style="margin-top:12px"><button class="btn primary" id="ovLogin">📱 扫码登录</button></div></div></div></div>`
     : `<div class="card span-2">
         <div class="hero">
           <img class="avatar" src="${esc(img(a.face, '144w_144h'))}" alt="" onerror="this.style.visibility='hidden'">
@@ -244,14 +249,37 @@ async function pageOverview(main) {
          <div class="card" id="apCard"></div>
          <div class="card"><div class="card-h"><h2>近 14 天看视频数</h2><span class="small muted">鼠标移上去看当天明细</span></div><div id="ovChart" class="chart"></div></div>
        </div>
-       <div class="card"><div class="card-h"><h2>最近动态</h2><a href="#/activity" class="small">全部 →</a></div><div id="ovRecent"></div></div>
+       <div class="grid">
+         <div class="card" id="ovWish" style="display:none"></div>
+         <div class="card"><div class="card-h"><h2>最近动态</h2><a href="#/activity" class="small">全部 →</a></div><div id="ovRecent"></div></div>
+       </div>
      </div>`;
+  renderWishes($('#ovWish'));
 
   $('#ovRefresh').onclick = () => route();
+  const ol = $('#ovLogin');
+  if (ol) ol.onclick = () => openLogin();
   renderApCard($('#apCard'), ap);
   renderChart($('#ovChart'), ov.series);
   const r = await api('/api/actions?limit=6').catch(() => ({ list: [] }));
   $('#ovRecent').innerHTML = r.list.length ? `<ul class="tl compact">${r.list.map((x) => tlItem(x, true)).join('')}</ul>` : '<div class="empty">还没有动作</div>';
+}
+
+// 点赞 / 分享被 B站 拦着时她想点的视频：你在自己浏览器里点，B站 认真浏览器
+async function renderWishes(el) {
+  if (!el) return;
+  const { list } = await api('/api/wishes').catch(() => ({ list: [] }));
+  if (!el.isConnected) return;
+  if (!list.length) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const name = { like: '❤️ 点赞', share: '↗️ 分享' };
+  el.innerHTML = `<div class="card-h"><h2>🖱️ 等你帮她点</h2><button class="btn sm ghost" id="wishAll">全部清掉</button></div>
+    <p class="small muted" style="margin-top:0">接口点赞 / 分享被 B站 拦着，这些是她看完想点的。在你登录了她账号的浏览器里打开，点一下就好（分享 = 点分享按钮复制链接）。</p>
+    <ul class="vip-list">${list.map((w) => `<li><div style="flex:1;min-width:0"><a href="https://www.bilibili.com/video/${esc(w.bvid)}" target="_blank" rel="noopener" data-wish="${esc(w.id)}">${esc(w.title || w.bvid)}</a>
+      <div class="small muted">${name[w.kind] || w.kind}${w.owner ? ' · ' + esc(w.owner) : ''} · ${ago(w.ts)}</div></div>
+      <button class="btn sm ghost" data-wdone="${esc(w.id)}" title="点过了">✓</button></li>`).join('')}</ul>`;
+  $$('[data-wdone]', el).forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/wishes/done', { id: b.dataset.wdone }); renderWishes(el); })));
+  $('#wishAll', el).onclick = (e) => busy(e.target, async () => { await api('/api/wishes/done', { id: '*' }); renderWishes(el); });
 }
 
 function oneTimeTips(x) {
@@ -295,7 +323,8 @@ function renderApCard(el, ap) {
     <div class="dial" style="margin-top:${live.running ? 12 : 0}px">${dial}</div>
     <div class="row wrap small" style="justify-content:space-between">
       <span class="muted">${ap.cooldownUntil ? `🧊 风控冷却到 ${hm(ap.cooldownUntil)}` : !c.enabled ? '打开后，会在蓝色的时辰里随机挑时间去刷' : next ? `下一轮：${next.label.slice(0, 2)} ${hm(next.at)}` : '今天的计划都跑完了'}
-      ${ap.lastRun ? ` · 上一轮 ${ago(ap.lastRun.at)}` : ''}</span>
+      ${ap.lastRun ? ` · 上一轮 ${ago(ap.lastRun.at)}` : ''}
+      ${(ap.blocks || []).length ? `<br>⏸ 暂停中：${ap.blocks.map((b) => `${esc(b.name)}（到 ${new Date(b.until).getMonth() + 1}/${new Date(b.until).getDate()} ${hm(b.until)}）`).join('、')}` : ''}</span>
       <span class="row">${ap.cooldownUntil ? '<button class="btn sm" id="apCool">解除冷却</button>' : ''}
         <button class="btn sm" ${live.running ? 'disabled' : ''} id="apRun">现在刷一轮</button>
         <a class="btn sm ghost" href="#/autopilot">设置</a></span>
@@ -494,6 +523,25 @@ async function pageAutopilot(main) {
         </div>
       </div>
       <div class="cfg-sec">
+        <h3>⭐ 特别关注</h3>
+        <p>名单在右边。TA 发了新视频，她会优先去看（认真看 75%~100%），然后点赞、收藏、投币（受下面的投币开关和锁约束）、评论；发了图文/文字动态就顺手点个赞，再去看看 TA 最近没看过的视频。只有<b>自动养号开着</b>时才会自己去查。</p>
+        <div class="cfg-grid">
+          ${tog('vip.enabled', '启用特别关注')}
+          ${tog('vip.asap', '有更新就尽快去看', '几分钟内；关掉则等下一个时辰顺路看')}
+          ${num('vip.quietStart', '深夜不去（从几点）', { max: 23 })}
+          ${num('vip.quietEnd', '深夜不去（到几点）', { max: 23 })}
+          ${num('vip.checkMin', '多久看一眼动态（分钟）', { min: 10, max: 240, hint: '会随机抖动' })}
+          ${num('vip.maxAgeHours', '只追多少小时内发的', { min: 1, max: 720 })}
+          ${num('vip.dailyMax', '一天最多追几个视频', { min: 1, max: 30 })}
+          ${num('vip.maxWatchSec', '单个视频最多看（秒）', { min: 60, max: 7200 })}
+          ${tog('vip.like', '点赞')}
+          ${tog('vip.favorite', '收藏', '进默认收藏夹')}
+          ${tog('vip.coin', '投币', '优先投给 TA')}
+          ${tog('vip.comment', '评论', '按上面的评论方式，计入每日上限')}
+          ${tog('vip.likeDynamic', '给 TA 的动态点赞')}
+        </div>
+      </div>
+      <div class="cfg-sec">
         <h3>投币</h3>
         <p>每枚 +10 经验，但新号每天只送 1 枚币。<b>接口投币只要失败一次就永久上锁</b>，免得反复失败把号搞成异常。</p>
         ${ap.coinLock ? `<div class="live" style="background:var(--amber-soft);margin-bottom:12px"><div style="flex:1"><b>🔒 投币已上锁</b><div class="small muted">${esc(ap.coinLock.reason || '')} · ${esc(String(ap.coinLock.at || '').slice(0, 16).replace('T', ' '))}</div></div><button class="btn sm" id="unlockCoin">我确认，解锁</button></div>` : ''}
@@ -522,8 +570,31 @@ async function pageAutopilot(main) {
         <div class="row" style="margin-top:10px"><button class="btn sm" id="llmModels">列出可用模型</button><button class="btn sm" id="llmTest">测试连通</button><span class="small muted" id="llmMsg"></span></div>
       </div>
       <div class="cfg-sec">
+        <h3>📮 QQ 提醒 <span id="ntState"></span></h3>
+        <p>起草好要你审的东西（今晚的日记、想发的评论、想回的话），她会在 QQ 里主动跟你说。你直接回「可以」她就发，回「改成……」就按你的改，「算了」就丢掉。
+        用的是 QQ 官方机器人的<b>主动消息</b>，平台有条数限额；没发出去也没关系，下次你找她聊天时她会先问你。</p>
+        <div class="cfg-grid">
+          ${tog('notify.enabled', '在 QQ 里提醒我')}
+          ${sel('notify.source', '用哪个机器人', [['dsh', '用 DSH 里接的那个'], ['manual', '手动填 AppID / Secret']], '凭证只在本机用，不会传回页面')}
+          ${num('notify.dailyMax', '每天最多提醒几次', { min: 1, max: 10 })}
+          ${num('notify.quietStart', '免打扰（从几点）', { max: 23 })}
+          ${num('notify.quietEnd', '免打扰（到几点）', { max: 23 })}
+          ${tog('notify.kinds.diary', '日记')}
+          ${tog('notify.kinds.comment', '评论')}
+          ${tog('notify.kinds.reply', '回复别人')}
+        </div>
+        <div class="cfg-grid" id="ntManual">
+          <div><label class="f">AppSecret</label><input type="password" id="qqAppSecret" placeholder="留空不改" autocomplete="off"><div class="hint">QQ 开放平台 → 你的机器人 → 开发设置。DSH 不把它存成明文，这里得填一次</div></div>
+          <div><label class="f">AppID</label><input id="qqAppId" placeholder="留空 = 用 DSH 的" autocomplete="off"></div>
+          <div><label class="f">你的 openid</label><input id="qqOpenId" placeholder="留空 = 用 DSH 的" autocomplete="off"></div>
+        </div>
+        <div class="row" style="margin-top:10px"><button class="btn sm" id="ntTest">发一条测试</button><span class="small muted" id="ntMsg"></span></div>
+      </div>
+      <div class="cfg-sec">
         <h3>风控</h3>
-        <p>遇到 -352 / -412 / -799 这类风控码，这一轮立刻停，然后歇一段时间。</p>
+        <p>遇到 -352 / -412 / -799 这类风控码，这一轮立刻停，然后歇一段时间。<br>
+        点赞、分享、收藏这类动作只要被 B站 拒一次（比如 -403「账号异常」），就<b>单独暂停这个动作</b> 24 小时（连着再被拒：3 天、7 天），视频照样看。</p>
+        ${(ap.blocks || []).map((b) => `<div class="live" style="background:var(--amber-soft);margin-bottom:8px"><div style="flex:1"><b>⏸ ${esc(b.name)}暂停到 ${new Date(b.until).toLocaleString('zh-CN', { hour12: false }).slice(5, -3)}</b><div class="small muted">B站 回的是「${esc(b.error)}」· 第 ${b.strikes} 次</div></div><button class="btn sm" data-unblock="${esc(b.kind)}">恢复</button></div>`).join('')}
         <div class="cfg-grid">${num('cooldownMin', '冷却多久（分钟）', { min: 10, max: 1440 })}</div>
       </div>
       <div class="save-bar"><button class="btn primary" id="saveCfg">保存设置</button></div>
@@ -534,6 +605,8 @@ async function pageAutopilot(main) {
           <div class="body"><div class="x">${esc(s.label)}</div><div class="m">${{ done: '刷完了', skipped: '随机偷懒', missed: '错过了（电脑睡着）', running: '正在刷', failed: '中断', pending: '等着' }[s.status] || s.status}${s.summary ? ' · ' + esc(s.summary) : ''}</div></div></li>`).join('')}</ul>` : '<div class="empty">没有选时辰</div>'}
         <div class="hint">${c.enabled ? '' : '⚠️ 总开关还没开，计划不会执行。'}</div>
       </div>
+      <div style="height:16px"></div>
+      <div class="card" id="vipCard"><div class="card-h"><h2>⭐ 特别关注</h2></div><div class="empty">加载中…</div></div>
       <div style="height:16px"></div>
       <div class="card"><div class="card-h"><h2>为什么这样设计</h2></div>
         <div class="small" style="color:var(--text2)">
@@ -580,8 +653,13 @@ async function pageAutopilot(main) {
   };
   const save = async (extra = {}) => {
     const body = { ...collect(), ...extra };
+    if (body.vip) delete body.vip.users; // 名单走单独的接口，别被这个页面里的旧名单覆盖
     const k = $('#llmKey').value.trim();
     if (k) body.llmApiKey = k;
+    for (const id of ['qqAppId', 'qqAppSecret', 'qqOpenId']) {
+      const v = $('#' + id)?.value.trim();
+      if (v) body[id] = v;
+    }
     await api('/api/autopilot/config', body);
   };
   $('#saveCfg').onclick = (e) => busy(e.target, async () => { await save(); toast('设置已保存'); route(); });
@@ -602,11 +680,143 @@ async function pageAutopilot(main) {
     const inp = $('[data-path="llm.model"]', main);
     if (models.length && !models.includes(inp.value.trim())) { inp.value = ''; inp.focus(); }
   });
+  $$('[data-unblock]', main).forEach((b) => (b.onclick = async () => {
+    if (!(await confirmBox('恢复这个动作？', 'B站 刚拒过它。恢复后如果再被拒，会暂停更久。', '恢复'))) return;
+    busy(b, async () => { await api('/api/blocks/clear', { kind: b.dataset.unblock }); toast('已恢复'); route(); });
+  }));
+  renderVipCard($('#vipCard'));
+  // QQ 提醒
+  const ntRefresh = () => api('/api/notify').then((n) => {
+    $('#ntState').innerHTML = n.ready ? '<span class="chip green">机器人可用</span>' : `<span class="chip amber">${esc(n.why || '未配置')}</span>`;
+    const last = n.log[0];
+    $('#ntMsg').textContent = `今天提醒了 ${n.sentToday} 次` +
+      (n.windowOpen ? ` · 回复窗口开着（到 ${hm(n.windowUntil)}）` : ' · 你最近一小时没在 QQ 说话，提醒会等你开口再发') +
+      (n.pending ? ` · ${n.pending} 条排队中` : '') +
+      (last ? ` · 最近一次${last.ok ? '成功' : '失败：' + (last.error || '')}` : '');
+  }).catch(() => {});
+  ntRefresh();
+  $('#ntTest').onclick = (e) => busy(e.target, async () => {
+    await save();
+    await api('/api/notify/test', {});
+    toast('发出去了，看看 QQ');
+    ntRefresh();
+  });
   const un = $('#unlockCoin');
   if (un) un.onclick = async () => {
     if (!(await confirmBox('解锁投币？', '之前接口投币失败过。解锁后如果再失败会自动重新上锁。\n建议先在浏览器里确认这个号投币正常，再解锁。', '解锁'))) return;
     busy(un, async () => { await api('/api/coin/unlock', {}); toast('已解锁'); route(); });
   };
+}
+
+// ─── 扫码登录 ──────────────────────────────────────────────
+function renderLoginBanner(acct) {
+  let el = $('#loginBanner');
+  const out = acct && !acct.loggedIn;
+  if (!out) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'loginBanner';
+    el.className = 'login-banner';
+    document.body.prepend(el);
+  }
+  el.innerHTML = '⚠️ B站 掉登录了，自动养号和所有操作都停着 <button class="btn sm primary">扫码登录</button>';
+  $('button', el).onclick = () => openLogin();
+  const f = $('#footLogin');
+  if (f) f.onclick = (e) => { e.preventDefault(); openLogin(); };
+}
+
+let loginTimer = null;
+async function openLogin() {
+  openDrawer('扫码登录 B站', '<div class="empty">取二维码…</div>');
+  clearTimeout(loginTimer);
+  let q;
+  try { q = await api('/api/login/qr', {}); } catch (e) { $('#drawerBody').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  $('#drawerBody').innerHTML = `
+    <div class="qr-box">
+      <div class="qr">${q.svg}</div>
+      <div id="qrMsg" class="qr-msg">用手机 <b>B站 App</b> 扫一扫（首页左上角头像旁边 / 「我的」右上角），然后点确认登录</div>
+      <div class="hint">要登录的是她的号「在逃肥鱼公主」，别扫成你自己的号。二维码大约 3 分钟过期。</div>
+      <button class="btn sm" id="qrNew" style="margin-top:10px">换一张</button>
+    </div>`;
+  $('#qrNew').onclick = () => openLogin();
+  const poll = async () => {
+    if (!$('#drawer').classList.contains('show') || !$('#qrMsg')) return; // 抽屉关了就别再查
+    let r;
+    try { r = await api('/api/login/poll?key=' + encodeURIComponent(q.key)); } catch (e) { r = { status: 'waiting', net: e.message }; }
+    const msg = $('#qrMsg');
+    if (!msg) return;
+    if (r.status === 'ok') {
+      msg.innerHTML = '✅ 登录成功！';
+      toast('重新登录好了');
+      setTimeout(() => { closeDrawer(); route(); }, 900);
+      return;
+    }
+    if (r.status === 'expired' || Date.now() > q.expiresAt + 10_000) {
+      msg.innerHTML = '二维码过期了 <button class="btn sm primary" id="qrAgain">再来一张</button>';
+      $('#qrAgain').onclick = () => openLogin();
+      $('.qr').style.opacity = 0.25;
+      return;
+    }
+    if (r.status === 'scanned') msg.innerHTML = '📱 扫到了，在手机上点「确认登录」';
+    if (r.status === 'error') msg.innerHTML = `<span style="color:var(--red)">${esc(r.message)}</span> <button class="btn sm" id="qrAgain">重来</button>`;
+    if (r.status === 'error') { $('#qrAgain').onclick = () => openLogin(); return; }
+    loginTimer = setTimeout(poll, 2000);
+  };
+  loginTimer = setTimeout(poll, 2000);
+}
+
+// ─── 特别关注名单 ──────────────────────────────────────────
+async function renderVipCard(el, data) {
+  if (!el) return;
+  let vip;
+  let users;
+  try {
+    [vip, users] = data ? [data, data.users] : await Promise.all([api('/api/vip'), api('/api/vip/users').then((r) => r.users)]);
+    users ??= (await api('/api/vip/users')).users;
+  } catch (e) { el.innerHTML = `<div class="card-h"><h2>⭐ 特别关注</h2></div><div class="err">${esc(e.message)}</div>`; return; }
+  if (!el.isConnected) return;
+  const q = vip.queue || [];
+  el.innerHTML = `<div class="card-h"><h2>⭐ 特别关注</h2><button class="btn sm" id="vipImport" title="把你在 B站 设的「特别关注」分组导进来">从B站导入</button></div>
+    <div class="row" style="margin-bottom:10px"><input id="vipIn" placeholder="UID 或空间链接" style="flex:1;min-width:0"><button class="btn sm primary" id="vipAdd">添加</button></div>
+    ${users.length ? `<ul class="vip-list">${users.map((u) => `<li>
+        <img src="${esc(img(u.face, '48w_48h'))}" alt="" onerror="this.style.visibility='hidden'">
+        <div style="flex:1;min-width:0"><a href="https://space.bilibili.com/${esc(u.uid)}" target="_blank" rel="noopener"><b>${esc(u.name)}</b></a>
+          <div class="small muted">${esc(u.uid)} · ${u.following === false ? '<span style="color:var(--amber)">还没关注，动态流里看不到 TA</span>' : u.following ? '已关注' : '关注状态未知'}</div></div>
+        ${u.following === false ? `<button class="btn sm" data-follow="${esc(u.uid)}" data-name="${esc(u.name)}">关注</button>` : ''}
+        <button class="btn sm ghost" data-rm="${esc(u.uid)}" title="移出特别关注">×</button></li>`).join('')}</ul>` : '<div class="empty small">还没有人。加个 UID，或者从 B站 的特别关注分组导入。</div>'}
+    <div class="small muted" style="margin-top:10px">${!vip.autopilotOn ? '⚠️ 自动养号没开，不会自己去查' : vip.lastCheck ? `上次查看 ${ago(vip.lastCheck)}${vip.nextCheck ? ` · 下次约 ${hm(vip.nextCheck)}` : ''}` : '还没查过'} · 今天追了 ${vip.doneToday}/${vip.config.dailyMax}</div>
+    ${q.length ? `<div class="vip-q">${q.map((x) => x.type === 'video'
+        ? `<div>📺 <a href="#" data-open="${esc(x.bvid)}">${esc(x.title)}</a> <span class="muted">· ${esc(x.name)}${x.why ? ' · ' + esc(x.why) : ''}</span></div>`
+        : `<div>👍 <span class="muted">${esc(x.name)} 的动态：</span>${esc(x.text || '（图片）')}</div>`).join('')}
+      ${vip.runAt ? `<div class="small muted">打算 ${hm(vip.runAt)} 去看</div>` : ''}</div>` : ''}
+    <div class="row" style="margin-top:10px"><button class="btn sm" id="vipCheck">现在查一下</button>${q.length ? '<button class="btn sm primary" id="vipRun">现在就去看</button>' : ''}</div>`;
+
+  const redraw = (r) => renderVipCard(el, r.users ? r : undefined);
+  $('#vipAdd', el).onclick = (e) => busy(e.target, async () => {
+    const r = await api('/api/vip/add', { uid: $('#vipIn', el).value });
+    toast('加进特别关注了');
+    redraw(r);
+  });
+  $('#vipIn', el).onkeydown = (e) => { if (e.key === 'Enter') $('#vipAdd', el).click(); };
+  $('#vipImport', el).onclick = (e) => busy(e.target, async () => {
+    const r = await api('/api/vip/import', {});
+    toast(r.total ? `B站 分组里有 ${r.total} 个，新导入 ${r.imported} 个` : 'B站 的特别关注分组是空的');
+    redraw(r);
+  });
+  $$('[data-rm]', el).forEach((b) => (b.onclick = () => busy(b, async () => redraw(await api('/api/vip/remove', { uid: b.dataset.rm })))));
+  $$('[data-follow]', el).forEach((b) => (b.onclick = () => busy(b, async () => {
+    await api('/api/vip/follow', { uid: b.dataset.follow, name: b.dataset.name });
+    toast('关注了');
+    renderVipCard(el);
+  })));
+  $$('[data-open]', el).forEach((a) => (a.onclick = (e) => { e.preventDefault(); openVideo(a.dataset.open); }));
+  $('#vipCheck', el).onclick = (e) => busy(e.target, async () => {
+    const r = await api('/api/vip/check', {});
+    toast(r.found ? `发现 ${r.found} 条新动态` : '没有新东西');
+    renderVipCard(el);
+  });
+  const run = $('#vipRun', el);
+  if (run) run.onclick = () => busy(run, async () => { await api('/api/vip/run', {}); toast('她去看特别关注了，进度在总览里'); });
 }
 
 // ─── 刷视频 ────────────────────────────────────────────────
@@ -715,7 +925,7 @@ async function openVideo(bvid) {
   $('#drawerBody').innerHTML = `
     <div class="vhead"><a href="https://www.bilibili.com/video/${esc(v.bvid)}" target="_blank" rel="noopener"><img src="${esc(img(v.pic, '672w_378h_1c'))}" alt=""></a>
       <h3>${esc(v.title)}</h3>
-      <div class="row small" style="gap:8px"><img src="${esc(img(v.ownerFace, '48w_48h'))}" style="width:22px;height:22px;border-radius:50%" alt="" onerror="this.remove()"><b>${esc(v.owner)}</b><span class="muted">${esc(v.tname)} · ${fmtDur(v.duration)} · ${esc(v.bvid)}</span></div>
+      <div class="row small" style="gap:8px"><img src="${esc(img(v.ownerFace, '48w_48h'))}" style="width:22px;height:22px;border-radius:50%" alt="" onerror="this.remove()"><b>${esc(v.owner)}</b><span class="muted">${esc(v.tname)} · ${fmtDur(v.duration)} · ${esc(v.bvid)}</span>${v.ownerUid ? '<button class="btn sm ghost" id="vVip" title="TA 一发新视频就优先去看">⭐ 特别关注 TA</button>' : ''}</div>
       <div class="stats" style="margin-top:8px"><span>▶ ${fmtNum(v.stat.view)}</span><span>💬 ${fmtNum(v.stat.reply)}</span><span>❤️ ${fmtNum(v.stat.like)}</span><span>🪙 ${fmtNum(v.stat.coin)}</span><span>⭐ ${fmtNum(v.stat.favorite)}</span><span>↗️ ${fmtNum(v.stat.share)}</span></div>
       ${v.desc ? `<div class="desc">${esc(v.desc)}</div>` : ''}
     </div>
@@ -723,6 +933,7 @@ async function openVideo(bvid) {
       <button class="btn primary" id="vWatch">📺 让她看这个</button>
       <button class="btn" id="vLike">❤️ 点赞</button>
       <button class="btn" id="vShare">↗️ 分享</button>
+      <button class="btn" id="vFav">⭐ 收藏</button>
       <button class="btn" id="vCoin" ${locked ? 'disabled title="投币已上锁"' : ''}>🪙 投币${locked ? '（锁）' : ''}</button>
     </div>
     <div class="cfg-sec" style="margin-top:16px">
@@ -739,6 +950,9 @@ async function openVideo(bvid) {
   });
   $('#vLike').onclick = (e) => busy(e.target, async () => { await api('/api/like', { bvid: v.bvid, title: v.title }); toast('点赞了'); });
   $('#vShare').onclick = (e) => busy(e.target, async () => { await api('/api/share', { bvid: v.bvid, title: v.title }); toast('分享了（+5 经验）'); });
+  $('#vFav').onclick = (e) => busy(e.target, async () => { const r = await api('/api/favorite', { bvid: v.bvid, title: v.title }); toast(r.already ? '早就收藏过了' : '收藏了'); });
+  const vv = $('#vVip');
+  if (vv) vv.onclick = () => busy(vv, async () => { await api('/api/vip/add', { uid: v.ownerUid }); toast(`「${v.owner}」加进特别关注了`); });
   $('#vCoin').onclick = async (e) => {
     if (!(await confirmBox('投 1 个币？', '失败一次就会永久锁住投币。确定？', '投'))) return;
     busy(e.target, async () => { await api('/api/coin', { bvid: v.bvid, title: v.title }); toast('投币成功'); });
@@ -900,13 +1114,14 @@ async function renderDm(out) {
 
 // ─── 待审 · 派活 ───────────────────────────────────────────
 async function pageReview(main) {
-  main.innerHTML = head('待审 · 派活', 'AI 起草的评论和日记在这里等你点头；也可以给 QQ 里的她派活') +
+  main.innerHTML = head('待审 · 派活', 'AI 起草的评论、回复和日记在这里等你点头；派的活面板会直接去做') +
     `<div class="grid g-3"><div class="span-2"><div class="card"><div class="card-h"><h2>待审</h2><span class="small muted">改一改再发，或者直接丢掉</span></div><div id="rvList"><div class="empty">加载中…</div></div></div></div>
      <div><div class="card"><div class="card-h"><h2>派活给她</h2></div>
-       <p class="small muted" style="margin-top:0">任务会进她的任务箱。你下次在 QQ 跟她说话时，她会先看任务箱再去干活。</p>
+       <p class="small muted" style="margin-top:0">点一下她就马上去做（真看视频、按你说的点赞/分享/收藏/评论），结果写在下面。评论、回复、日记会先进「待审」。</p>
        <div class="row wrap">${[['browse', '随便刷刷'], ['browse_like', '刷+点赞'], ['comment', '去评论'], ['diary', '写日记'], ['check', '查新消息']].map(([k, n]) => `<button class="btn sm" data-task="${k}">${n}</button>`).join('')}</div>
-       <div class="field" style="margin-top:12px"><textarea id="taskNote" placeholder="或者写点具体的：去看看XX的新视频，给个评论…" style="min-height:60px"></textarea>
-         <div class="row" style="margin-top:6px;justify-content:flex-end"><button class="btn sm primary" id="taskCustom">派出去</button></div></div>
+       <div class="field" style="margin-top:12px"><textarea id="taskNote" placeholder="或者直接说要干嘛…" style="min-height:60px"></textarea>
+         <div class="row" style="margin-top:6px"><label class="row small muted" title="不让面板做，进任务箱等你在 QQ 里叫她"><input type="checkbox" id="taskBot"> 交给 QQ 里的她</label><span class="spacer"></span><button class="btn sm primary" id="taskCustom">派出去</button></div>
+         <div class="hint">比如：「搜「猫」看两个，喜欢就点赞收藏」「找个天文视频看完分享」「看三个，别评论」</div></div>
        <div id="taskList"></div></div></div></div>`;
   const loadRv = async () => {
     const r = await api('/api/review');
@@ -914,7 +1129,8 @@ async function pageReview(main) {
     const done = r.list.filter((x) => x.status !== 'pending').slice(0, 10);
     S.badges.review = pending.length; renderNav();
     $('#rvList').innerHTML = (pending.length ? pending.map((x) => `<div class="rv" data-id="${esc(x.id)}">
-        <div class="row small"><span class="chip ${x.kind === 'diary' ? 'violet' : 'blue'}">${x.kind === 'diary' ? '📔 日记（公开动态）' : '💬 评论'}</span>
+        <div class="row small"><span class="chip ${x.kind === 'diary' ? 'violet' : x.kind === 'reply' ? 'pink' : 'blue'}">${x.kind === 'diary' ? '📔 日记（公开动态）' : x.kind === 'reply' ? '↩️ 回复 @' + esc(x.payload?.user || '') : '💬 评论'}</span>
+          ${x.kind === 'reply' ? `<span class="muted" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">TA 说：${esc(x.payload?.said || '')}</span>` : ''}
           ${x.payload?.bvid ? `<a data-bvid="${esc(x.payload.bvid)}" style="cursor:pointer" class="small">《${esc(x.payload.title)}》</a>` : ''}<span class="spacer"></span><span class="muted">${ago(x.ts)}</span></div>
         <textarea>${esc(x.text)}</textarea>
         <div class="row" style="justify-content:flex-end"><button class="btn sm ghost danger" data-rej>不要了</button><button class="btn sm primary" data-ok>${x.kind === 'diary' ? '发动态' : '发出去'}</button></div></div>`).join('')
@@ -932,20 +1148,28 @@ async function pageReview(main) {
   };
   const loadTasks = async () => {
     const r = await api('/api/tasks');
-    const st = { pending: ['等她', 'amber'], in_progress: ['在做', 'blue'], done: ['做完', 'green'], cancelled: ['取消', ''] };
+    const st = { pending: ['等她', 'amber'], in_progress: ['在做', 'blue'], done: ['做完', 'green'], failed: ['没做成', 'red'], cancelled: ['取消', ''] };
     $('#taskList').innerHTML = `<div class="tl-day">任务箱</div>` + (r.tasks.length ? `<ul class="tl">${r.tasks.slice(0, 20).map((t) => `<li><div class="time">${hm(t.ts)}</div><div class="ico">📋</div>
-      <div class="body"><div class="x">${esc(t.note || t.type)}</div><div class="m"><span class="chip ${st[t.status]?.[1] || ''}">${st[t.status]?.[0] || t.status}</span>${t.source === 'auto' ? '<span class="chip blue">自动派的</span>' : ''}${t.resultNote ? esc(t.resultNote) : ''}
+      <div class="body"><div class="x">${esc(t.note || t.type)}</div><div class="m"><span class="chip ${st[t.status]?.[1] || ''}">${st[t.status]?.[0] || t.status}</span>${t.source === 'auto' ? '<span class="chip blue">自动派的</span>' : ''}${t.executor === 'bot' && t.source !== 'auto' ? '<span class="chip pink">QQ里的她</span>' : ''} ${t.resultNote ? esc(t.resultNote) : ''}
       ${t.status === 'pending' ? `<button class="btn sm ghost" data-cancel="${esc(t.id)}">取消</button>` : ''}</div></div></li>`).join('')}</ul>` : '<div class="empty">空的</div>');
     $$('[data-cancel]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/tasks/cancel', { id: b.dataset.cancel }); loadTasks(); })));
+    // 面板在做的活：隔几秒刷新一下进度
+    clearTimeout(S.taskTimer);
+    if (r.tasks.some((t) => t.status === 'in_progress' && t.executor === 'panel')) S.taskTimer = setTimeout(() => { if (S.page === 'review') loadTasks(); }, 8000);
   };
-  $$('[data-task]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/tasks', { type: b.dataset.task }); toast('派出去了'); loadTasks(); })));
+  const executor = () => ($('#taskBot').checked ? 'bot' : 'panel');
+  const afterSend = () => {
+    toast(executor() === 'bot' ? '进任务箱了，下次在 QQ 叫她' : '她去做了，结果会写在任务箱里');
+    loadTasks();
+    if (executor() === 'panel') { pollLive(); setTimeout(loadTasks, 4000); }
+  };
+  $$('[data-task]').forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/tasks', { type: b.dataset.task, executor: executor() }); afterSend(); })));
   $('#taskCustom').onclick = (e) => busy(e.target, async () => {
     const note = $('#taskNote').value.trim();
     if (!note) throw new Error('写点内容');
-    await api('/api/tasks', { type: 'custom', note });
+    await api('/api/tasks', { type: 'custom', note, executor: executor() });
     $('#taskNote').value = '';
-    toast('派出去了');
-    loadTasks();
+    afterSend();
   });
   loadRv().catch((e) => ($('#rvList').innerHTML = `<div class="err">${esc(e.message)}</div>`));
   loadTasks();

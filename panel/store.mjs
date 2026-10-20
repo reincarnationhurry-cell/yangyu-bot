@@ -17,6 +17,8 @@ export const FILES = {
   config: join(DATA, 'autopilot.json'),
   state: join(DATA, 'state.json'),
   secrets: join(DATA, 'secrets.json'),
+  blocks: join(DATA, 'blocks.json'),
+  vip: join(DATA, 'vip.json'),
   diary: join(ROOT, 'diary', 'data', 'entries.jsonl'),
 };
 
@@ -90,8 +92,9 @@ export function readTasks() {
   for (const t of readJsonl(FILES.tasks)) map.set(t.id, { ...(map.get(t.id) || {}), ...t });
   return [...map.values()].sort((a, b) => (a.ts < b.ts ? 1 : -1));
 }
-export function addTask({ type, payload, note, source = 'panel' }) {
-  const task = { id: crypto.randomUUID(), ts: nowIso(), type, payload: payload || {}, note: note || '', status: 'pending', source };
+// executor：panel = 面板自己马上去做；bot = 进任务箱，等 QQ 里的她来认领
+export function addTask({ type, payload, note, source = 'panel', executor = 'bot' }) {
+  const task = { id: crypto.randomUUID(), ts: nowIso(), type, payload: payload || {}, note: note || '', status: 'pending', source, executor };
   appendJsonl(FILES.tasks, task);
   logAction({ kind: 'task', target: type, detail: note || JSON.stringify(payload || {}), source });
   return task;
@@ -171,6 +174,32 @@ export const DEFAULT_CONFIG = {
     baseUrl: 'https://api.deepseek.com',
     model: 'deepseek-chat',
   },
+  // 特别关注：TA 发了新视频/动态，就优先去看，并点赞、收藏、（能投就投币）、评论
+  vip: {
+    enabled: true,
+    users: [], // [{ uid, name, face }]
+    checkMin: 20, // 多久看一眼关注动态（会随机抖动）
+    maxAgeHours: 72, // 只追最近这么久发的
+    dailyMax: 6, // 一天最多追几个视频
+    asap: true, // 有新视频就尽快去看；false 则等下一个时辰顺路看
+    quietStart: 1, // 尽快模式也不在这段时间里跑（点）
+    quietEnd: 8,
+    maxWatchSec: 1200,
+    like: true,
+    favorite: true,
+    coin: true, // 仍受「投币」总开关和投币锁约束
+    comment: true, // 按「评论」的方式（交给她 / AI 起草）来，计入每日上限
+    likeDynamic: true, // 图文/文字动态顺手点个赞
+  },
+  // 有东西要你审时，让她在 QQ 里主动叫你（QQ 官方机器人的单聊主动消息，平台有限额）
+  notify: {
+    enabled: false,
+    source: 'dsh', // dsh：用 DSH 里接的那个 QQ 机器人 / manual：面板里手填
+    dailyMax: 3,
+    quietStart: 23,
+    quietEnd: 8,
+    kinds: { diary: true, comment: true, reply: true },
+  },
   // 碰到风控码后歇多久（分钟）
   cooldownMin: 120,
 };
@@ -207,3 +236,76 @@ export function readState() {
   return readJson(FILES.state, { plans: {}, cooldownUntil: null, seen: {}, lastRun: null });
 }
 export function writeState(s) { writeJson(FILES.state, s); }
+
+// ─── 动作熔断 ──────────────────────────────────────────────
+// 点赞、分享、收藏这类写接口一旦被 B站 拒绝（比如 -403「账号异常」），
+// 就先别碰这个动作：第一次停 24 小时，连着再被拒就停 3 天、7 天。
+// 失败越多越像异常账号 —— 跟投币锁一个道理，只是不永久。
+export const ACTION_NAMES = {
+  like: '点赞', share: '分享', favorite: '收藏', dyn_like: '动态点赞', comment: '评论', follow: '关注',
+};
+export function readBlocks() {
+  const all = readJson(FILES.blocks, {});
+  const now = Date.now();
+  return Object.fromEntries(Object.entries(all).filter(([, b]) => b.until > now));
+}
+export function blockedFor(kind) {
+  return readBlocks()[kind] || null;
+}
+export function addBlock(kind, { code, error }) {
+  const all = readJson(FILES.blocks, {});
+  const prev = all[kind];
+  // 上次熔断结束后 48 小时内又被拒，算「连着」
+  const strikes = prev && Date.now() - prev.until < 48 * 3600_000 ? (prev.strikes || 1) + 1 : 1;
+  const hours = [24, 72, 168][Math.min(strikes, 3) - 1];
+  all[kind] = { at: nowIso(), until: Date.now() + hours * 3600_000, code: code ?? null, error: error || '', strikes };
+  writeJson(FILES.blocks, all);
+  return all[kind];
+}
+/** 手动触发的写动作（面板按钮、act.mjs）也过同一根保险丝 */
+export async function withBlock(kind, fn) {
+  const name = ACTION_NAMES[kind] || kind;
+  const b = blockedFor(kind);
+  if (b) {
+    const until = new Date(b.until).toLocaleString('zh-CN', { hour12: false });
+    throw new Error(`${name}暂停中（到 ${until}），上次 B站 回的是「${b.error}」。真想试，先去「自动养号」页点「恢复」`);
+  }
+  try {
+    return await fn();
+  } catch (e) {
+    // 只有 B站 明确拒绝（带错误码）才熔断，网络抖动不算
+    if (e?.constructor?.name === 'BiliError') addBlock(kind, { code: e.code, error: e.message });
+    throw e;
+  }
+}
+// ─── 「想点没点成」清单 ────────────────────────────────────
+// 点赞 / 分享 / 投币被 B站 拦着时，她想点的视频记在这里，你在自己浏览器里顺手点掉。
+// 真浏览器里的点击 B站 是认的（投币就是这么验证的）。
+const WISH_FILE = join(DATA, 'wishes.json');
+export function readWishes() {
+  const all = readJson(WISH_FILE, []);
+  const cut = Date.now() - 3 * 86400_000; // 三天前的就算了
+  return all.filter((w) => !w.done && Date.parse(w.ts) >= cut);
+}
+export function addWish({ kind, bvid, title, owner }) {
+  if (!bvid) return;
+  const all = readJson(WISH_FILE, []).filter((w) => Date.parse(w.ts) >= Date.now() - 7 * 86400_000);
+  if (all.some((w) => w.bvid === bvid && w.kind === kind && !w.done)) return;
+  all.push({ id: crypto.randomUUID(), ts: nowIso(), kind, bvid, title: title || '', owner: owner || '', done: false });
+  writeJson(WISH_FILE, all.slice(-60));
+}
+export function finishWish(id) {
+  const all = readJson(WISH_FILE, []);
+  for (const w of all) if (w.id === id || id === '*') w.done = true;
+  writeJson(WISH_FILE, all);
+}
+export function clearBlock(kind) {
+  const all = readJson(FILES.blocks, {});
+  if (all[kind]) { all[kind].until = 0; writeJson(FILES.blocks, all); }
+}
+
+// ─── 特别关注的运行状态（队列、已处理的动态）────────────────
+export function readVip() {
+  return readJson(FILES.vip, { lastCheck: 0, nextCheck: 0, runAt: null, queue: [], handled: {}, done: {} });
+}
+export function writeVip(v) { writeJson(FILES.vip, v); }

@@ -83,6 +83,7 @@ async function getDevice() {
 async function cookieHeader(ck) {
   const parts = [`SESSDATA=${ck.sessdata}`, `bili_jct=${ck.bili_jct || ''}`];
   if (ck.dede_user_id) parts.push(`DedeUserID=${ck.dede_user_id}`);
+  for (const [k, v] of Object.entries(ck.extra || {})) if (/^[\w]+$/.test(k) && v) parts.push(`${k}=${v}`);
   try {
     const d = await getDevice();
     parts.push(`buvid3=${d.buvid3}`, `b_nut=${d.b_nut}`);
@@ -347,7 +348,8 @@ export async function shareVideo(bvid) {
   const v = await videoBase(bvid);
   await jpost(
     'https://api.bilibili.com/x/web-interface/share/add',
-    { aid: String(v.aid), bvid: v.bvid },
+    // 网页播放器分享时带的就是这几个字段，只给 aid 的请求不像真人点的
+    { aid: String(v.aid), eab_x: '2', ramval: '0', source: 'web_normal', ga: '1' },
     { referer: `https://www.bilibili.com/video/${v.bvid}`, okCodes: [0, 71000] },
   );
   return { ok: true };
@@ -734,4 +736,198 @@ export async function sendPrivateMessage(receiverUid, text) {
     { referer: 'https://message.bilibili.com/', origin: 'https://message.bilibili.com' },
   );
   return { msgKey: String(j.data?.msg_key || '') };
+}
+
+// ─── 关注 / 动态 / 收藏（给「特别关注」用）─────────────────────
+// 动态流 feed/all 一次就能拿到所有关注的人的新动态，比挨个去 UP 主空间查省得多
+// （空间投稿接口 /x/space/wbi/arc/search 风控很严，能不碰就不碰）。
+
+const DYN_KIND = {
+  DYNAMIC_TYPE_AV: 'video',
+  DYNAMIC_TYPE_DRAW: 'draw',
+  DYNAMIC_TYPE_WORD: 'word',
+  DYNAMIC_TYPE_FORWARD: 'forward',
+  DYNAMIC_TYPE_ARTICLE: 'article',
+  DYNAMIC_TYPE_LIVE_RCMD: 'live',
+};
+
+function mapDynamic(it) {
+  const m = it.modules || {};
+  const author = m.module_author || {};
+  const dyn = m.module_dynamic || {};
+  const arc = dyn.major?.archive;
+  const text =
+    dyn.desc?.text ||
+    dyn.major?.opus?.summary?.text ||
+    dyn.major?.opus?.title ||
+    dyn.major?.article?.title ||
+    '';
+  return {
+    id: String(it.id_str || ''),
+    kind: DYN_KIND[it.type] || 'other',
+    uid: String(author.mid || ''),
+    name: author.name || '',
+    face: author.face || '',
+    ts: Number(author.pub_ts || 0) * 1000,
+    text: String(text).slice(0, 200),
+    liked: !!m.module_stat?.like?.status,
+    video: arc
+      ? {
+          bvid: arc.bvid,
+          aid: String(arc.aid || ''),
+          title: arc.title,
+          pic: arc.cover,
+          durationText: arc.duration_text,
+          durationSec: parseDuration(arc.duration_text),
+        }
+      : null,
+  };
+}
+
+/** 关注的人的动态流（最新在前）。type: all / video */
+export async function followFeed({ type = 'all', offset = '' } = {}) {
+  const q = new URLSearchParams({ timezone_offset: '-480', type, page: '1', features: 'itemOpusStyle' });
+  if (offset) q.set('offset', offset);
+  const r = await jget('https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all?' + q);
+  if (r.code !== 0) throw new BiliError(`取关注动态失败：${r.message}`, r.code);
+  return {
+    items: (r.data?.items || []).map(mapDynamic).filter((x) => x.id && x.uid),
+    offset: r.data?.offset || '',
+  };
+}
+
+/** B站自带的「特别关注」分组（tagid = -10） */
+export async function specialFollowings() {
+  const r = await jget('https://api.bilibili.com/x/relation/tag?tagid=-10&pn=1&ps=50');
+  if (r.code !== 0) throw new BiliError(`取特别关注分组失败：${r.message}`, r.code);
+  return (r.data || []).map((u) => ({ uid: String(u.mid), name: u.uname, face: u.face }));
+}
+
+/** 我和某人的关系：following = 我关注了 TA */
+export async function relationWith(uid) {
+  const r = await jget(`https://api.bilibili.com/x/relation?fid=${encodeURIComponent(uid)}`);
+  if (r.code !== 0) throw new BiliError(`查关注关系失败：${r.message}`, r.code);
+  const a = Number(r.data?.attribute || 0);
+  return { following: a === 2 || a === 6, blocked: a === 128 };
+}
+
+export async function followUser(uid) {
+  await jpost(
+    'https://api.bilibili.com/x/relation/modify',
+    { fid: String(uid), act: '1', re_src: '11' },
+    { referer: `https://space.bilibili.com/${uid}` },
+  );
+  return { ok: true };
+}
+
+/** 给一条动态点赞（不是视频点赞）。这个接口吃 JSON，csrf 在 query 里 */
+export async function likeDynamic(dynId) {
+  const ck = loadCookie();
+  const res = await fetch(
+    `https://api.bilibili.com/x/dynamic/feed/dyn/thumb?csrf=${encodeURIComponent(ck.bili_jct)}`,
+    {
+      method: 'POST',
+      headers: {
+        'User-Agent': UA,
+        Referer: `https://t.bilibili.com/${dynId}`,
+        Origin: 'https://t.bilibili.com',
+        'Content-Type': 'application/json',
+        Cookie: await cookieHeader(ck),
+      },
+      body: JSON.stringify({ dyn_id_str: String(dynId), up: 1, spmid: '333.1365.0.0' }),
+      signal: AbortSignal.timeout(15000),
+    },
+  );
+  if (res.status === 412) throw new BiliError('请求被风控拦截（HTTP 412）', 412);
+  const j = await res.json().catch(() => ({ code: -1, message: `HTTP ${res.status}` }));
+  if (j.code !== 0) throw new BiliError(`${j.message || '失败'}（code=${j.code}）`, j.code);
+  return { ok: true };
+}
+
+/** 收藏进默认收藏夹；已经收藏过就什么都不做 */
+export async function favoriteVideo(bvid) {
+  const ck = loadCookie();
+  const v = await videoBase(bvid);
+  const had = await jget(`https://api.bilibili.com/x/v2/fav/video/favoured?aid=${v.aid}`);
+  if (had.code === 0 && had.data?.favoured) return { ok: true, already: true };
+  const fl = await jget(
+    `https://api.bilibili.com/x/v3/fav/folder/created/list-all?type=2&up_mid=${encodeURIComponent(ck.dede_user_id || '')}`,
+  );
+  const folder = fl.data?.list?.[0];
+  if (fl.code !== 0 || !folder) throw new BiliError(`找不到默认收藏夹：${fl.message || ''}`, fl.code);
+  await jpost(
+    'https://api.bilibili.com/x/v3/fav/resource/deal',
+    { rid: String(v.aid), type: '2', add_media_ids: String(folder.id), del_media_ids: '' },
+    { referer: `https://www.bilibili.com/video/${v.bvid}` },
+  );
+  return { ok: true, already: false };
+}
+
+/** 我有没有给这个视频点过赞（只读，用来避免重复点、核对失败的点赞到底生效没） */
+export async function hasLiked(bvid) {
+  const r = await jget(`https://api.bilibili.com/x/web-interface/archive/has/like?bvid=${encodeURIComponent(bvid)}`);
+  return r.code === 0 && Number(r.data) === 1;
+}
+
+// ─── 扫码登录 ──────────────────────────────────────────────
+// 改了密保、改密码、异地登录之类，B站会把旧 SESSDATA 作废（面板显示「掉登录」）。
+// 流程：generate 拿 url + qrcode_key → 手机 B站 扫码确认 → poll 返回 0 时，凭证在 Set-Cookie 里。
+// 写回同一个 cookie.json：面板下一次请求就用新的，DSH 里的 MCP 也会（打过补丁）自动重读。
+const PASSPORT = 'https://passport.bilibili.com/x/passport-login/web/qrcode';
+
+export async function qrLoginStart() {
+  const r = await fetch(`${PASSPORT}/generate`, {
+    headers: { 'User-Agent': UA, Referer: 'https://www.bilibili.com' },
+    signal: AbortSignal.timeout(10000),
+  }).then((x) => x.json());
+  if (r.code !== 0 || !r.data?.qrcode_key) throw new Error(`取登录二维码失败（code=${r.code}）`);
+  // 二维码用 bilibili-mcp 自带的 qrcode 包画成 SVG，面板保持零依赖
+  const { createRequire } = await import('node:module');
+  const QR = createRequire(join(ROOT, 'bilibili-mcp', 'package.json'))('qrcode');
+  const svg = await QR.toString(r.data.url, { type: 'svg', margin: 2, errorCorrectionLevel: 'M' });
+  return { key: r.data.qrcode_key, svg, expiresAt: Date.now() + 170_000 };
+}
+
+/** 查一次扫码状态：waiting / scanned / expired / ok */
+export async function qrLoginPoll(key) {
+  const res = await fetch(`${PASSPORT}/poll?qrcode_key=${encodeURIComponent(key)}`, {
+    headers: { 'User-Agent': UA, Referer: 'https://www.bilibili.com' },
+    signal: AbortSignal.timeout(10000),
+  });
+  const j = await res.json();
+  const code = j.data?.code;
+  if (code === 86101) return { status: 'waiting' };
+  if (code === 86090) return { status: 'scanned' };
+  if (code === 86038) return { status: 'expired' };
+  if (code !== 0) return { status: 'error', message: j.data?.message || j.message || `code=${code}` };
+
+  const jar = new Map();
+  for (const raw of res.headers.getSetCookie?.() || []) {
+    const [pair] = raw.split(';');
+    const eq = pair.indexOf('=');
+    if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+  }
+  // 兜底：成功时 data.url 的 query 里也带着这几个值
+  try {
+    const u = new URL(j.data.url);
+    for (const k of ['SESSDATA', 'bili_jct', 'DedeUserID']) if (!jar.get(k) && u.searchParams.get(k)) jar.set(k, u.searchParams.get(k));
+  } catch { /* 没有就算了 */ }
+  if (!jar.get('SESSDATA')) return { status: 'error', message: '确认了登录，但没拿到 SESSDATA，再扫一次试试' };
+
+  // SESSDATA 在 Set-Cookie 里是 URL 编码过的（带 %2C），原样存，发请求时也原样带
+  const ck = {
+    sessdata: jar.get('SESSDATA'),
+    bili_jct: jar.get('bili_jct') || '',
+    dede_user_id: jar.get('DedeUserID') || '',
+    lastRefresh: Date.now(),
+  };
+  if (j.data.refresh_token) ck.refresh_token = j.data.refresh_token;
+  // 登录时 B站 一并下发的会话 cookie 也留着，发请求时原样带上（以前只存三个，等于把会话拆残了）
+  const extra = Object.fromEntries([...jar].filter(([k]) => ['DedeUserID__ckMd5', 'sid'].includes(k)));
+  if (Object.keys(extra).length) ck.extra = extra;
+  mkdirSync(dirname(COOKIE_FILE), { recursive: true });
+  const tmp = COOKIE_FILE + '.tmp';
+  writeFileSync(tmp, JSON.stringify(ck, null, 2), { mode: 0o600 });
+  renameSync(tmp, COOKIE_FILE);
+  return { status: 'ok', uid: ck.dede_user_id };
 }

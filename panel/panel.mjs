@@ -16,10 +16,12 @@ import { fileURLToPath } from 'node:url';
 import * as bili from './bili.mjs';
 import * as llm from './llm.mjs';
 import * as auto from './autopilot.mjs';
+import * as notify from './notify.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
   readReview, updateReview, readConfig, writeConfig, readSecrets, writeSecrets,
   readState, writeState, readJsonl, todayCounts, nowIso,
+  readBlocks, clearBlock, withBlock, ACTION_NAMES, readVip, writeVip, readWishes, finishWish,
 } from './store.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -74,7 +76,21 @@ function autopilotView() {
     llmReady: llm.llmReady(),
     hasKey: !!readSecrets().llmApiKey,
     coinLock: bili.coinLock(),
+    blocks: Object.entries(readBlocks()).map(([kind, b]) => ({ kind, name: ACTION_NAMES[kind] || kind, ...b })),
   };
+}
+
+// 特别关注名单 + 我是否已关注 TA（动态流里只有关注了的人）
+async function vipUsers() {
+  const users = readConfig().vip.users;
+  return cached('vipRel:' + users.map((u) => u.uid).join(','), 10 * 60_000, async () => {
+    const out = [];
+    for (const u of users) {
+      const rel = await bili.relationWith(u.uid).catch(() => null);
+      out.push({ ...u, following: rel ? rel.following : null });
+    }
+    return out;
+  });
 }
 
 // ─── HTTP 工具 ─────────────────────────────────────────────
@@ -135,6 +151,19 @@ const routes = {
     };
   },
 
+  // 扫码登录（掉登录时用）
+  'POST /api/login/qr': async () => bili.qrLoginStart(),
+  'GET /api/login/poll': async (q) => {
+    const key = q.get('key');
+    if (!key) throw new Error('缺 key');
+    const r = await bili.qrLoginPoll(key);
+    if (r.status === 'ok') {
+      cache.clear(); // 旧账号状态全作废
+      logAction({ kind: 'login', target: r.uid, detail: '扫码重新登录了 B站' });
+    }
+    return r;
+  },
+
   // 活动记录
   'GET /api/actions': async (q) => {
     let list = readActions();
@@ -158,15 +187,28 @@ const routes = {
       check: '看看有没有新评论和私信要回',
     };
     if (!map[b.type] && !b.note) throw new Error('未知任务类型');
-    return { ok: true, task: addTask({ type: b.type || 'custom', note: b.note || map[b.type], payload: b.payload }) };
+    const executor = b.executor === 'bot' ? 'bot' : 'panel';
+    const task = addTask({ type: b.type || 'custom', note: b.note || map[b.type], payload: b.payload, executor });
+    if (executor === 'panel') {
+      if (readState().cooldownUntil > Date.now()) {
+        updateTask(task.id, { status: 'failed', resultNote: '风控冷却中，先别派活' });
+        throw new Error('风控冷却中，先在总览里解除冷却');
+      }
+      auto.runTask(task).then(() => bust('exp', 'account'));
+    }
+    return { ok: true, task };
   },
   'POST /api/tasks/cancel': async (_q, b) => { updateTask(b.id, { status: 'cancelled', doneAt: nowIso() }); return { ok: true }; },
 
   // 自动养号
   'GET /api/autopilot': async () => autopilotView(),
   'POST /api/autopilot/config': async (_q, b) => {
-    const { llmApiKey, ...patch } = b;
+    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, ...patch } = b;
     if (typeof llmApiKey === 'string') writeSecrets({ llmApiKey: llmApiKey.trim() });
+    // QQ 提醒的凭证：只存本机 secrets.json，留空表示不改
+    for (const [k, v] of Object.entries({ qqAppId, qqAppSecret, qqOpenId })) {
+      if (typeof v === 'string' && v.trim()) writeSecrets({ [k]: v.trim() });
+    }
     const before = readConfig();
     const cfg = writeConfig(patch);
     if (JSON.stringify(before.windows) !== JSON.stringify(cfg.windows) || before.windowChance !== cfg.windowChance) auto.replanToday();
@@ -191,6 +233,66 @@ const routes = {
   },
   'POST /api/autopilot/llm-test': async () => ({ ok: true, reply: await llm.ping() }),
   'POST /api/autopilot/llm-models': async () => ({ models: await llm.listModels() }),
+  'POST /api/blocks/clear': async (_q, b) => {
+    clearBlock(b.kind);
+    logAction({ kind: 'autopilot', detail: `手动恢复了「${ACTION_NAMES[b.kind] || b.kind}」` });
+    return autopilotView();
+  },
+
+  // 特别关注
+  'GET /api/vip': async () => auto.vipView(),
+  'POST /api/vip/add': async (_q, b) => {
+    const uid = String(b.uid || '').match(/\d{1,20}/)?.[0];
+    if (!uid) throw new Error('填 UID，或者贴 TA 的空间链接（space.bilibili.com/数字）');
+    const cfg = readConfig();
+    if (cfg.vip.users.some((u) => u.uid === uid)) throw new Error('已经在特别关注里了');
+    const card = (await bili.userCards([uid]))[uid] || {};
+    if (!card.name) throw new Error('查不到这个 UID');
+    writeConfig({ vip: { users: [...cfg.vip.users, { uid, name: card.name, face: card.face || '' }] } });
+    // 以前加过又删掉的：忘掉当时处理过的动态，重新按「最近 N 小时」来追
+    const vq = readVip();
+    vq.handled = Object.fromEntries(Object.entries(vq.handled || {}).filter(([, h]) => h.uid !== uid));
+    writeVip(vq);
+    logAction({ kind: 'vip', target: uid, detail: `把「${card.name}」加进了特别关注` });
+    return { ...auto.vipView(), users: await vipUsers() };
+  },
+  'POST /api/vip/remove': async (_q, b) => {
+    const cfg = readConfig();
+    const u = cfg.vip.users.find((x) => x.uid === String(b.uid));
+    writeConfig({ vip: { users: cfg.vip.users.filter((x) => x.uid !== String(b.uid)) } });
+    const vq = readVip();
+    vq.queue = vq.queue.filter((q) => q.uid !== String(b.uid));
+    writeVip(vq);
+    if (u) logAction({ kind: 'vip', target: u.uid, detail: `把「${u.name}」移出了特别关注` });
+    return { ...auto.vipView(), users: await vipUsers() };
+  },
+  'POST /api/vip/import': async () => {
+    const list = await bili.specialFollowings();
+    const cfg = readConfig();
+    const fresh = list.filter((u) => !cfg.vip.users.some((x) => x.uid === u.uid));
+    if (fresh.length) writeConfig({ vip: { users: [...cfg.vip.users, ...fresh] } });
+    return { ...auto.vipView(), users: await vipUsers(), imported: fresh.length, total: list.length };
+  },
+  'GET /api/vip/users': async () => ({ users: await vipUsers() }),
+  'POST /api/vip/follow': async (_q, b) => {
+    await withBlock('follow', () => bili.followUser(String(b.uid)));
+    for (const k of cache.keys()) if (k.startsWith('vipRel')) cache.delete(k);
+    logAction({ kind: 'follow', target: String(b.uid), title: b.name, detail: `关注了「${b.name || b.uid}」` });
+    return { users: await vipUsers() };
+  },
+  'POST /api/vip/check': async () => {
+    const r = await auto.checkVip({ force: true });
+    return { ...auto.vipView(), found: r.found };
+  },
+  'POST /api/vip/run': async () => {
+    const st = readState();
+    if (st.cooldownUntil && st.cooldownUntil > Date.now()) throw new Error('风控冷却中，先在总览里解除冷却');
+    if (auto.liveStatus().running) throw new Error('她已经在刷了');
+    if (!auto.vipView().queue.length) throw new Error('特别关注暂时没有新东西');
+    auto.runSession({ reason: '面板 · 特别关注', vipOnly: true }).then(() => bust('exp', 'account'));
+    await new Promise((r) => setTimeout(r, 300));
+    return autopilotView();
+  },
   'POST /api/coin/unlock': async () => {
     bili.unlockCoin();
     logAction({ kind: 'autopilot', detail: '手动解锁了投币' });
@@ -225,15 +327,20 @@ const routes = {
   'GET /api/history': async () => ({ list: await cached('history', 60_000, () => bili.watchHistory(30)) }),
 
   'POST /api/like': async (_q, b) => {
-    await bili.likeVideo(b.bvid, b.like !== false);
+    await withBlock('like', () => bili.likeVideo(b.bvid, b.like !== false));
     logAction({ kind: 'like', target: b.bvid, title: b.title, detail: b.like !== false ? `给《${b.title || b.bvid}》点了赞` : '取消赞' });
     return { ok: true };
   },
   'POST /api/share': async (_q, b) => {
-    await bili.shareVideo(b.bvid);
+    await withBlock('share', () => bili.shareVideo(b.bvid));
     bust('exp');
     logAction({ kind: 'share', target: b.bvid, title: b.title, detail: `分享了《${b.title || b.bvid}》` });
     return { ok: true };
+  },
+  'POST /api/favorite': async (_q, b) => {
+    const r = await withBlock('favorite', () => bili.favoriteVideo(b.bvid));
+    if (!r.already) logAction({ kind: 'favorite', target: b.bvid, title: b.title, detail: `收藏了《${b.title || b.bvid}》` });
+    return { ok: true, already: r.already };
   },
   'POST /api/coin': async (_q, b) => {
     try {
@@ -296,21 +403,19 @@ const routes = {
   // 待审
   'GET /api/review': async () => ({ list: readReview().slice(0, 60) }),
   'POST /api/review/approve': async (_q, b) => {
-    const r = readReview().find((x) => x.id === b.id);
-    if (!r || r.status !== 'pending') throw new Error('这条已经处理过了');
-    const text = String(b.text ?? r.text).trim();
-    if (!text) throw new Error('内容是空的');
-    if (r.kind === 'comment') {
-      const res = await bili.postComment({ bvid: r.payload.bvid, message: text });
-      logAction({ kind: 'comment', source: 'auto', target: r.payload.bvid, title: r.payload.title, detail: text });
-      updateReview(r.id, { status: 'posted', text, rpid: res.rpid });
-    } else if (r.kind === 'diary') {
-      const res = await auto.publishDiary(text, 'auto', { force: true });
-      updateReview(r.id, { status: 'posted', text, url: res.url });
-    }
-    return { ok: true };
+    const r = await auto.approveReview(b.id, b.text, 'panel');
+    bust('replyFeed');
+    return { ok: true, ...r };
   },
-  'POST /api/review/reject': async (_q, b) => { updateReview(b.id, { status: 'rejected' }); return { ok: true }; },
+  'POST /api/review/reject': async (_q, b) => { auto.rejectReview(b.id, 'panel'); return { ok: true }; },
+
+  // 接口被拦、等你在浏览器里点的
+  'GET /api/wishes': async () => ({ list: readWishes() }),
+  'POST /api/wishes/done': async (_q, b) => { finishWish(b.id || '*'); return { list: readWishes() }; },
+
+  // QQ 提醒
+  'POST /api/notify/test': async () => ({ ok: true, ...(await notify.sendOwner('🐟 测试一下：以后有要你审的东西，我会在这里叫你～')) }),
+  'GET /api/notify': async () => notify.status(),
 
   // 日记
   'GET /api/diary': async () => {

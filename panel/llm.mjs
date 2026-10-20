@@ -148,3 +148,74 @@ ${list}
 export async function ping() {
   return chat([{ role: 'user', content: '回复「在呢」两个字' }], { maxTokens: 10, temperature: 0 });
 }
+
+// ─── 派活：把一句大白话变成可执行的计划 ─────────────────────
+// 计划只能是下面这几个字段，执行端还会再夹一遍上限；模型说什么都越不过去。
+const CN_NUM = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 几: 3 };
+
+/** 不靠模型的兜底解析：关键词 + 数字 */
+export function heuristicPlan(note) {
+  const t = String(note || '');
+  const m = t.match(/(\d+|[一两二三四五几])\s*(个|条|部)/);
+  const count = m ? Number(m[1]) || CN_NUM[m[1]] || 1 : /一个|个视频|找个/.test(t) ? 1 : undefined;
+  const kws = [...t.matchAll(/[「“"']([^」”"']{1,20})[」”"']/g)].map((x) => x[1]);
+  const about = t.match(/(?:搜|找|看看?)(?:一?下|几个|个)?(?:关于)?([一-龥A-Za-z0-9]{2,10})的(?:视频|内容)/);
+  if (!kws.length && about && !/新|这|那|一/.test(about[1])) kws.push(about[1]);
+  const flag = (re, neg) => (neg.test(t) ? false : re.test(t) ? true : undefined);
+  return {
+    count,
+    keywords: kws,
+    like: flag(/点赞|点个赞|三连/, /别点赞|不要点赞|不点赞/),
+    share: flag(/分享|转发/, /别分享|不要分享|不分享/),
+    favorite: flag(/收藏|三连/, /别收藏|不要收藏/),
+    comment: flag(/评论|留言|说两句|写两句/, /别评论|不要评论|不评论/),
+  };
+}
+
+// 有的网关/模型会把 JSON 截掉尾巴（实测停在最后一个字段前），补个括号再试
+function looseJson(out) {
+  const from = out.indexOf('{');
+  if (from < 0) throw new Error('没有 JSON');
+  let body = out.slice(from);
+  const to = body.lastIndexOf('}');
+  if (to >= 0) {
+    try { return JSON.parse(body.slice(0, to + 1)); } catch { /* 往下补 */ }
+  }
+  try { return JSON.parse(body.trim().replace(/,\s*$/, '') + '}'); } catch { /* 最后一个字段也断了 */ }
+  body = body.replace(/,\s*"[^"]*"?\s*:?\s*[^,}]*$/, '').replace(/,\s*$/, '');
+  return JSON.parse(body.endsWith('}') ? body : body + '}');
+}
+
+export async function parseTask(note) {
+  const base = heuristicPlan(note);
+  if (!llmReady()) return { ...base, by: 'rule' };
+  try {
+    const out = await chat(
+      [
+        {
+          role: 'system',
+          content: `你把用户给B站小号派的活，翻译成 JSON 计划。只输出 JSON，不要解释。字段：
+{"count":要看几个视频(1-5的整数，没说就 2),"keywords":["要搜的关键词，没说就空数组"],"like":true/false/null,"share":true/false/null,"favorite":true/false/null,"comment":true/false/null}
+true=每个看完的视频都做，false=明确说不要，null=没提（随缘）。「三连」=like+favorite（投币不用管）。`,
+        },
+        { role: 'user', content: String(note).slice(0, 300) },
+      ],
+      { maxTokens: 500, temperature: 0 },
+    );
+    let j;
+    try { j = looseJson(out); } catch (e) { e.raw = out; throw e; }
+    const b = (v) => (v === true || v === false ? v : undefined);
+    return {
+      count: Number.isFinite(+j.count) ? +j.count : base.count,
+      keywords: Array.isArray(j.keywords) ? j.keywords.map(String).filter(Boolean).slice(0, 3) : base.keywords,
+      like: b(j.like) ?? base.like,
+      share: b(j.share) ?? base.share,
+      favorite: b(j.favorite) ?? base.favorite,
+      comment: b(j.comment) ?? base.comment,
+      by: 'llm',
+    };
+  } catch (e) {
+    if (process.env.DEBUG_TASK) console.error('[parseTask]', e.message, e.raw);
+    return { ...base, by: 'rule' };
+  }
+}

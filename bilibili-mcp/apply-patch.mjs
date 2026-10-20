@@ -206,6 +206,13 @@ import { registerInteractionTools } from './tools/interaction.js';`,
     find: "                `分P数: ${data.videos || 1}`,\n                `发布时间: ${new Date(pubdateTs).toLocaleString('zh-CN')}`,",
     replace: "                `分P数: ${data.videos || 1}`,\n                // [qq-bot patch] 补打印 cid：发弹幕必须用它，但上游输出里没给，\n                // 导致模型只能瞎猜（实测乱填会返回 -400 请求错误）。\n                `aid: ${data.aid}  cid: ${data.cid}`,\n                `发布时间: ${new Date(pubdateTs).toLocaleString('zh-CN')}`,",
   },
+  {
+    // [qq-bot patch] cookie 文件变了就重新读：面板扫码重新登录后，DSH 里的 MCP 不用重启
+    file: join(pkgRoot, 'config.js'),
+    mark: '[qq-bot patch] cookie 文件变了就重新读',
+    find: "let cachedConfig = null;\n/** 加载配置（环境变量优先，文件兜底） */\nexport function loadConfig() {\n    if (cachedConfig)\n        return cachedConfig;",
+    replace: "let cachedConfig = null;\n// [qq-bot patch] cookie 文件变了就重新读：养鱼面板扫码重新登录会改写这个文件，\n// 上游只在启动时读一次，导致 DSH 里的 MCP 一直拿着失效的旧 cookie，必须重启。\nlet cachedMtime = 0;\nfunction cookieFileMtime() {\n    try {\n        return process.env.BILIBILI_COOKIE_FILE ? fs.statSync(process.env.BILIBILI_COOKIE_FILE).mtimeMs : 0;\n    }\n    catch {\n        return 0;\n    }\n}\n/** 加载配置（环境变量优先，文件兜底） */\nexport function loadConfig() {\n    if (cachedConfig && !process.env.BILIBILI_SESSDATA) {\n        const m = cookieFileMtime();\n        if (m && m !== cachedMtime) {\n            cachedMtime = m;\n            try {\n                const f = JSON.parse(fs.readFileSync(process.env.BILIBILI_COOKIE_FILE, 'utf-8'));\n                if (f.sessdata) {\n                    cachedConfig.sessdata = f.sessdata;\n                    cachedConfig.bili_jct = f.bili_jct || '';\n                    cachedConfig.dede_user_id = f.dede_user_id || '';\n                }\n            }\n            catch {\n                // 正在写入或格式坏了，下次再读\n                cachedMtime = 0;\n            }\n        }\n    }\n    if (cachedConfig)\n        return cachedConfig;\n    cachedMtime = cookieFileMtime();",
+  },
 ];
 
 let allApplied = true;

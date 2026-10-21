@@ -15,6 +15,7 @@ import { readFileSync, existsSync, writeFileSync, renameSync, statSync } from 'n
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readConfig, readSecrets, localDate, nowIso, logAction, DATA } from './store.mjs';
+import * as llm from './llm.mjs';
 
 const DSH_CHANNELS = join(homedir(), '.dsh', 'dsh-im-connect', 'channels.json');
 const STATE = join(DATA, 'notify.json');
@@ -45,7 +46,8 @@ function credentials() {
   return {
     appId: s.qqAppId || d.appId,
     secret: s.qqAppSecret || d.appSecret,
-    openId: s.qqOpenId || d.ownerOpenId,
+    // 被动回复借的是 DSH 收到的 msg_id，openid 必须是 DSH 那边的；手填的对不上会被拒（11001）
+    openId: dshChannel().ownerOpenId || s.qqOpenId,
     from: cfg.source === 'manual' ? '面板里填的' : 'DSH',
   };
 }
@@ -182,6 +184,45 @@ export async function notifyReview(r) {
   }
 }
 
+/**
+ * QQ 里的她交给后台的活做完了：用她的口吻在 QQ 里汇报。
+ * 号主刚亲口交代的事，所以不看提醒开关、免打扰和每日上限（也不占这些额度）；
+ * 只受 QQ 的回复窗口约束 —— 窗口关了就排队，号主下次说话时 flushPending 补上。
+ */
+export async function reportTask(task, { ok, note, watched = [] }) {
+  let text = null;
+  if (llm.llmReady()) {
+    text = await llm.draftReport({ request: task.note || task.type, ok, note, watched }).catch(() => null);
+  }
+  if (!text) text = composeTaskReport(task, { ok, note, watched });
+  try {
+    await rawSend(text);
+    const st = readState();
+    st.log = [...(st.log || []), { ts: nowIso(), ok: true, task: task.id, text: text.slice(0, 60) }].slice(-30);
+    writeState(st);
+    logAction({ kind: 'notify', source: 'auto', target: task.id, detail: `在 QQ 里汇报：${text.slice(0, 60)}` });
+    return { sent: true };
+  } catch (e) {
+    const st = readState();
+    if (e instanceof NotInWindow) {
+      st.pending = [...(st.pending || []), { task: task.id, text, ts: Date.now() }];
+      writeState(st);
+      return { sent: false, why: 'deferred' };
+    }
+    st.log = [...(st.log || []), { ts: nowIso(), ok: false, task: task.id, error: e.message }].slice(-30);
+    writeState(st);
+    logAction({ kind: 'notify', source: 'auto', ok: false, target: task.id, error: e.message, detail: '活干完了，但 QQ 汇报没发出去' });
+    return { sent: false, why: e.message };
+  }
+}
+
+function composeTaskReport(task, { ok, note, watched }) {
+  const what = (task.note || task.type).slice(0, 30);
+  if (!ok) return `「${what}」没做成 qwq：${note}`;
+  const pick = watched[0] ? `，最喜欢的是《${watched[0].title}》` : '';
+  return `「${what}」搞定啦～${note}${pick}`;
+}
+
 function markSent(st, ids, text) {
   const today = localDate();
   st.sent = { ...Object.fromEntries(Object.entries(st.sent || {}).sort().slice(-6)), [today]: (st.sent?.[today] || 0) + 1 };
@@ -195,21 +236,41 @@ export function wasReminded(id) {
 }
 
 /**
- * 调度器每 30 秒调一次：有排队的提醒，而且你刚在 QQ 说过话（回复窗口开着），就补发。
+ * 调度器每 30 秒调一次：有排队的提醒 / 汇报，而且你刚在 QQ 说过话（回复窗口开着），就补发。
  * 多条合成一条发，省额度。readReview 由调用方传进来，避免 notify 依赖待审的存储细节。
  */
 export async function flushPending(readReview) {
   const st = readState();
   if (!st.pending?.length) return;
-  const cfg = readConfig().notify;
   const last = lastOwnerMessage();
-  if (!cfg.enabled || quiet(cfg) || !last?.fresh) return;
+  if (!last?.fresh) return;
   // 只在你「排队之后」又说了话才补发 —— 那是新的回复窗口
-  if (!st.pending.some((p) => last.at > p.ts)) return;
+  const ready = st.pending.filter((p) => last.at > p.ts);
+  if (!ready.length) return;
+
+  // 活干完的汇报：是你交代的事，不看提醒开关和上限
+  const reports = ready.filter((p) => p.task);
+  if (reports.length) {
+    const text = reports.map((p) => p.text).join('\n\n');
+    st.pending = st.pending.filter((p) => !reports.includes(p));
+    try {
+      await rawSend(text);
+      st.log = [...(st.log || []), { ts: nowIso(), ok: true, task: reports.map((p) => p.task).join(','), text: text.slice(0, 60) }].slice(-30);
+      logAction({ kind: 'notify', source: 'auto', target: reports.map((p) => p.task).join(','), detail: `你刚说话，补上之前的汇报：${text.slice(0, 60)}` });
+    } catch (e) {
+      st.log = [...(st.log || []), { ts: nowIso(), ok: false, error: e.message }].slice(-30);
+    }
+    writeState(st);
+  }
+
+  const reviews = ready.filter((p) => p.review);
+  if (!reviews.length) return;
+  const cfg = readConfig().notify;
+  if (!cfg.enabled || quiet(cfg)) return;
   if ((st.sent?.[localDate()] || 0) >= cfg.dailyMax) return;
-  const pendingIds = new Set(st.pending.map((p) => p.review));
+  const pendingIds = new Set(reviews.map((p) => p.review));
   const items = readReview().filter((r) => pendingIds.has(r.id) && r.status === 'pending' && cfg.kinds?.[r.kind]);
-  st.pending = [];
+  st.pending = st.pending.filter((p) => !reviews.includes(p));
   if (!items.length) { writeState(st); return; }
   const text = items.length === 1
     ? composeReviewMessage(items[0])

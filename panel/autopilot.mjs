@@ -656,7 +656,7 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
 
     const text = summarize(summary, signal.aborted);
     logAction({ kind: 'session_end', source: SRC, detail: text, meta: summary });
-    return { ok: true, summary: text };
+    return { ok: true, summary: text, watched: watchedList };
   } catch (e) {
     if (e.risk) enterCooldown(cfg, e);
     else logAction({ kind: 'error', source: SRC, ok: false, error: e.message, detail: '这一轮中断了' });
@@ -862,6 +862,12 @@ async function inboxNow() {
 export async function runTask(task) {
   updateTask(task.id, { status: 'in_progress', claimedAt: nowIso(), executor: 'panel' });
   let plan = null;
+  let watched = [];
+  // QQ 里的她交给后台的活：做完（或没做成）都让她在 QQ 里说一声
+  const report = (ok, note) => {
+    if (task.report !== 'qq') return;
+    notify.reportTask(task, { ok, note, watched }).catch(() => {});
+  };
   try {
     if (live.running) {
       updateTask(task.id, { resultNote: '她正在刷，这轮完了就去' });
@@ -877,11 +883,14 @@ export async function runTask(task) {
       const r = await runSession({ reason: `派活：${short}`, directive: plan });
       ok = r.ok;
       note = r.summary;
+      watched = r.watched || [];
     }
     updateTask(task.id, { status: ok ? 'done' : 'failed', doneAt: nowIso(), resultNote: note, plan });
     logAction({ kind: ok ? 'task_done' : 'error', source: SRC, ok, target: task.type, detail: `派的活：${task.note || task.type} → ${note}` });
+    report(ok, note);
   } catch (e) {
     updateTask(task.id, { status: 'failed', doneAt: nowIso(), resultNote: e.message, plan });
     logAction({ kind: 'error', source: SRC, ok: false, error: e.message, detail: `派的活没做成：${task.note || task.type}` });
+    report(false, e.message);
   }
 }

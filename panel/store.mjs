@@ -93,8 +93,10 @@ export function readTasks() {
   return [...map.values()].sort((a, b) => (a.ts < b.ts ? 1 : -1));
 }
 // executor：panel = 面板自己马上去做；bot = 进任务箱，等 QQ 里的她来认领
-export function addTask({ type, payload, note, source = 'panel', executor = 'bot' }) {
+// report：'qq' = 做完让她在 QQ 里跟号主汇报（QQ 里的她交给后台的活）
+export function addTask({ type, payload, note, source = 'panel', executor = 'bot', report }) {
   const task = { id: crypto.randomUUID(), ts: nowIso(), type, payload: payload || {}, note: note || '', status: 'pending', source, executor };
+  if (report) task.report = report;
   appendJsonl(FILES.tasks, task);
   logAction({ kind: 'task', target: type, detail: note || JSON.stringify(payload || {}), source });
   return task;

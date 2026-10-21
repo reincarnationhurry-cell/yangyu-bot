@@ -189,7 +189,12 @@ const routes = {
     };
     if (!map[b.type] && !b.note) throw new Error('未知任务类型');
     const executor = b.executor === 'bot' ? 'bot' : 'panel';
-    const task = addTask({ type: b.type || 'custom', note: b.note || map[b.type], payload: b.payload, executor });
+    // QQ 里的她（panel/bg.mjs）交给后台的活带 report: 'qq'，做完由后台在 QQ 里汇报
+    const fromBot = b.report === 'qq';
+    const task = addTask({
+      type: b.type || 'custom', note: b.note || map[b.type], payload: b.payload, executor,
+      source: fromBot ? 'bot' : 'panel', report: fromBot ? 'qq' : undefined,
+    });
     if (executor === 'panel') {
       if (readState().cooldownUntil > Date.now()) {
         updateTask(task.id, { status: 'failed', resultNote: '风控冷却中，先别派活' });

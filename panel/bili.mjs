@@ -56,7 +56,7 @@ export function isLoggedIn() {
 // 就是「没有设备的登录态」，是 -352 / -412 / 「账号异常」的常见诱因。
 // 这里向 B站要一对 buvid，落盘后长期复用 —— 真人的浏览器也不会每天换设备。
 let _device = null;
-async function getDevice() {
+export async function getDevice() {
   if (_device) return _device;
   if (existsSync(DEVICE_FILE)) {
     try {

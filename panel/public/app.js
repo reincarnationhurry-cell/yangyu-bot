@@ -274,10 +274,14 @@ async function renderWishes(el) {
   el.style.display = '';
   const name = { like: '❤️ 点赞', share: '↗️ 分享' };
   el.innerHTML = `<div class="card-h"><h2>🖱️ 等你帮她点</h2><button class="btn sm ghost" id="wishAll">全部清掉</button></div>
-    <p class="small muted" style="margin-top:0">接口点赞 / 分享被 B站 拦着，这些是她看完想点的。在你登录了她账号的浏览器里打开，点一下就好（分享 = 点分享按钮复制链接）。</p>
-    <ul class="vip-list">${list.map((w) => `<li><div style="flex:1;min-width:0"><a href="https://www.bilibili.com/video/${esc(w.bvid)}" target="_blank" rel="noopener" data-wish="${esc(w.id)}">${esc(w.title || w.bvid)}</a>
+    <p class="small muted" style="margin-top:0">接口点赞 / 分享被 B站 拦着，这些是她看完想点的。点标题会开一个<b>她专用的浏览器窗口</b>（直接用她现在的登录，不用再登录，也不会把这边挤掉），点一下就好（分享 = 点分享按钮复制链接）。<br>别在你自己的浏览器里登录她的号，那样会把面板这边挤掉线。</p>
+    <ul class="vip-list">${list.map((w) => `<li><div style="flex:1;min-width:0"><a href="#" data-wopen="${esc(w.bvid)}" title="在她的浏览器里打开">${esc(w.title || w.bvid)}</a>
       <div class="small muted">${name[w.kind] || w.kind}${w.owner ? ' · ' + esc(w.owner) : ''} · ${ago(w.ts)}</div></div>
       <button class="btn sm ghost" data-wdone="${esc(w.id)}" title="点过了">✓</button></li>`).join('')}</ul>`;
+  $$('[data-wopen]', el).forEach((a) => (a.onclick = (e) => {
+    e.preventDefault();
+    busy(null, async () => { await api('/api/browser/open', { bvid: a.dataset.wopen }); toast('在她的浏览器里打开了，去那个窗口点吧'); });
+  }));
   $$('[data-wdone]', el).forEach((b) => (b.onclick = () => busy(b, async () => { await api('/api/wishes/done', { id: b.dataset.wdone }); renderWishes(el); })));
   $('#wishAll', el).onclick = (e) => busy(e.target, async () => { await api('/api/wishes/done', { id: '*' }); renderWishes(el); });
 }

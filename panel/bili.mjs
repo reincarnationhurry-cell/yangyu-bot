@@ -536,6 +536,32 @@ export async function videoComments(bvid, aid, page = 1) {
   return { count: r.data?.page?.count || 0, list: (r.data?.replies || []).map(mapReply) };
 }
 
+// ─── 一串楼中楼（回别人之前，先看看这串里前面聊了什么）──────
+// 第一页是最老的 20 条；楼长了就再拉最后一页，保证最新的几句在里面
+export async function replyThread({ oid, type = 1, root, ps = 20 }) {
+  const url = (pn) => `https://api.bilibili.com/x/v2/reply/reply?oid=${oid}&type=${type}&root=${root}&pn=${pn}&ps=${ps}`;
+  const r = await jget(url(1));
+  if (r.code !== 0) throw new BiliError(`取楼中楼失败：${r.message}`, r.code);
+  let list = r.data?.replies || [];
+  const pages = Math.ceil((r.data?.page?.count || 0) / ps);
+  if (pages > 1) {
+    const last = await jget(url(pages)).catch(() => null);
+    if (last?.code === 0) list = [...list, ...(last.data?.replies || [])];
+  }
+  return { root: r.data?.root ? mapReply(r.data.root) : null, list: list.map(mapReply) };
+}
+
+// ─── 给评论点赞 ────────────────────────────────────────────
+export async function likeReply({ oid, type = 1, rpid }) {
+  await jpost('https://api.bilibili.com/x/v2/reply/action', { oid: String(oid), type: String(type), rpid: String(rpid), action: '1' });
+  return { ok: true };
+}
+
+/** 她自己的 UID（从 cookie 读，不打接口） */
+export function myUid() {
+  try { return String(loadCookie().dede_user_id || ''); } catch { return ''; }
+}
+
 // ─── 消息中心：未读数 / 回复我的 / @我 / 收到的赞 ───────────
 export async function unreadCounts() {
   const [feed, dm] = await Promise.all([

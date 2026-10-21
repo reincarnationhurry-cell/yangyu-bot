@@ -18,6 +18,7 @@ import * as llm from './llm.mjs';
 import * as auto from './autopilot.mjs';
 import * as notify from './notify.mjs';
 import * as mind from './mind.mjs';
+import * as social from './social.mjs';
 import { openAsHer } from './browser.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
@@ -78,6 +79,7 @@ function autopilotView() {
     llmReady: llm.llmReady(),
     hasKey: !!readSecrets().llmApiKey,
     coinLock: bili.coinLock(),
+    social: social.socialView(),
     blocks: Object.entries(readBlocks()).map(([kind, b]) => ({ kind, name: ACTION_NAMES[kind] || kind, ...b })),
   };
 }
@@ -427,6 +429,12 @@ const routes = {
 
   // 她的内心
   'GET /api/mind': async () => mind.dayView(),
+  'POST /api/social/check': async () => {
+    if (!social.socialOn()) throw new Error('先打开「评论区社交」并配好模型');
+    const r = await social.checkInbox();
+    bust('unread', 'replyFeed');
+    return { note: r.note, social: social.socialView() };
+  },
 
   // QQ 提醒
   'POST /api/notify/test': async () => ({ ok: true, ...(await notify.sendOwner('🐟 测试一下：以后有要你审的东西，我会在这里叫你～')) }),

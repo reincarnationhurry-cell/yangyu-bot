@@ -113,6 +113,7 @@ const KIND = {
   cooldown: ['🧊', '风控冷却'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
   login: ['🔑', '登录'], notify: ['📮', 'QQ 提醒'], favorite: ['⭐', '收藏'], vip_new: ['🌟', '特别关注更新'], dyn_like: ['👍', '动态点赞'], vip: ['🌟', '特别关注'], follow: ['➕', '关注'],
   mind: ['💭', '心里想'], dig: ['🕳️', '顺藤摸瓜'],
+  join: ['🗨️', '评论区搭话'], social: ['📬', '看回复'], reply_like: ['👍', '评论点赞'],
 };
 const SOURCE = { auto: ['自动', 'blue'], panel: ['面板', 'violet'], bot: ['QQ里的她', 'pink'] };
 
@@ -237,7 +238,7 @@ async function pageOverview(main) {
   const stats = `<div class="grid g-4">
       ${stat('📺 今天看了', t.watch || 0, '个视频', `共 ${fmtSec(todayS.seconds)}`)}
       ${stat('❤️ 点赞', t.like || 0, '', `上限 ${ap.config.like.dailyMax}/天`)}
-      ${stat('💬 评论', (t.comment || 0) + (t.reply_comment || 0), '', `${ov.reviewPending ? ov.reviewPending + ' 条待审' : '上限 ' + ap.config.comment.dailyMax + '/天'}`)}
+      ${stat('💬 评论', (t.comment || 0) + (t.reply_comment || 0) + (t.join || 0), '', `${ov.reviewPending ? ov.reviewPending + ' 条待审' : '上限 ' + ap.config.comment.dailyMax + '/天'}`)}
       ${stat('🔔 未读', ov.unread ? (ov.unread.reply + ov.unread.at + ov.unread.dm) : '–', '', ov.unread ? `回复 ${ov.unread.reply} · @ ${ov.unread.at} · 私信 ${ov.unread.dm}` : '查不到')}
     </div>`;
 
@@ -449,7 +450,7 @@ async function pageActivity(main) {
         <div class="seg" id="srcSeg">${[['', '全部'], ['auto', '自动'], ['panel', '面板'], ['bot', 'QQ里的她']].map(([k, n]) => `<button data-v="${k}" class="${F.source === k ? 'on' : ''}">${n}</button>`).join('')}</div>
         <select id="kindSel" style="width:auto">
           <option value="">所有动作</option>
-          <option value="watch">看视频</option><option value="like">点赞</option><option value="comment,reply_comment">评论 / 回复</option>
+          <option value="watch">看视频</option><option value="like">点赞</option><option value="comment,reply_comment,join">评论 / 回复</option><option value="social,join,reply_like">评论区社交</option>
           <option value="share,coin">分享 / 投币</option><option value="dm_send">私信</option><option value="session_start,session_end">每一轮</option>
           <option value="mind,dig">心里想 / 顺藤摸瓜</option><option value="error,cooldown">出错 / 风控</option>
         </select>
@@ -553,6 +554,24 @@ async function pageAutopilot(main) {
         </div>
       </div>
       <div class="cfg-sec">
+        <h3>🗨️ 评论区社交 ${ap.llmReady ? '' : '<span class="chip amber">要先配模型</span>'}</h3>
+        <p>看完视频翻评论区，看到真想接的热评就在楼里回一句；有人回她 / @她，她隔一阵看一眼，结合那串楼前面聊了啥、跟这个人熟不熟、自己现在的心情，<b>自己决定</b>回一句、只点个赞，还是不理。
+        同一串楼回够次数就收住。发之前要不要审跟着上面「AI 评论先给我审」走，都计入评论的保险丝。只有<b>自动养号开着</b>时才会自己去看。</p>
+        <div class="cfg-grid">
+          ${tog('social.enabled', '启用评论区社交')}
+          ${tog('social.join', '主动去热评下搭话')}
+          ${num('social.joinChance', '看完后去搭话的概率 %', { pct: 1, max: 100, hint: '喜欢的视频更高，1~2 分的不搭' })}
+          ${num('social.joinDailyMax', '每天最多搭话', { max: 20 })}
+          ${tog('social.reply', '有人回她，自己决定回不回')}
+          ${num('social.replyDailyMax', '每天最多回复', { max: 50 })}
+          ${num('social.checkMin', '多久看一眼回复（分钟）', { min: 10, max: 600, hint: '会抖动；刷完一轮也会瞄一眼' })}
+          ${num('social.threadMax', '同一串楼最多回几次', { min: 1, max: 20 })}
+          ${num('social.likeChance', '顺手给对方评论点赞 %', { pct: 1, max: 100 })}
+          ${num('social.quietStart', '深夜不回（从几点）', { max: 23 })}
+          ${num('social.quietEnd', '深夜不回（到几点）', { max: 23 })}
+        </div>
+      </div>
+      <div class="cfg-sec">
         <h3>⭐ 特别关注</h3>
         <p>名单在右边。TA 发了新视频，她会优先去看（认真看 75%~100%），然后点赞、收藏、投币（受下面的投币开关和锁约束）、评论；发了图文/文字动态就顺手点个赞，再去看看 TA 最近没看过的视频。只有<b>自动养号开着</b>时才会自己去查。</p>
         <div class="cfg-grid">
@@ -638,6 +657,8 @@ async function pageAutopilot(main) {
       <div style="height:16px"></div>
       <div class="card" id="vipCard"><div class="card-h"><h2>⭐ 特别关注</h2></div><div class="empty">加载中…</div></div>
       <div style="height:16px"></div>
+      <div class="card" id="socialCard"></div>
+      <div style="height:16px"></div>
       <div class="card"><div class="card-h"><h2>为什么这样设计</h2></div>
         <div class="small" style="color:var(--text2)">
           <p style="margin-top:0">· <b>经验上限是死的</b>：登录 5 + 观看 5 + 分享 5 + 投币 ≤ 50。不投币时一天最多 15，刷再多也没用，反而像机器人。</p>
@@ -715,6 +736,7 @@ async function pageAutopilot(main) {
     busy(b, async () => { await api('/api/blocks/clear', { kind: b.dataset.unblock }); toast('已恢复'); route(); });
   }));
   renderVipCard($('#vipCard'));
+  renderSocialCard($('#socialCard'), ap.social);
   // QQ 提醒
   const ntRefresh = () => api('/api/notify').then((n) => {
     $('#ntState').innerHTML = n.ready ? '<span class="chip green">机器人可用</span>' : `<span class="chip amber">${esc(n.why || '未配置')}</span>`;
@@ -796,6 +818,16 @@ async function openLogin() {
 }
 
 // ─── 特别关注名单 ──────────────────────────────────────────
+function renderSocialCard(el, s) {
+  if (!el || !s) return;
+  const when = (t) => (t ? new Date(t).toLocaleString('zh-CN', { hour12: false }).slice(5, -3) : '—');
+  el.innerHTML = `<div class="card-h"><h2>🗨️ 评论区的熟人</h2><button class="btn sm" id="socialCheck" ${s.on ? '' : 'disabled'}>现在看一眼回复</button></div>
+    <div class="small muted" style="margin-bottom:8px">今天搭话 ${s.today.join} · 回复 ${s.today.reply} · 上次看 ${when(s.lastCheck)} · 下次约 ${when(s.nextCheck)}${s.busy ? ' · 正在看…' : ''}</div>
+    ${s.people.length ? `<ul class="vip-list">${s.people.map((p) => `<li><a href="https://space.bilibili.com/${esc(p.uid)}" target="_blank" rel="noopener">${esc(p.name)}</a><span class="small muted">聊过 ${p.n} 次 · ${when(p.last)}</span></li>`).join('')}</ul>` : '<div class="empty">还没跟谁聊过</div>'}`;
+  const btn = $('#socialCheck', el);
+  if (btn) btn.onclick = (e) => busy(e.target, async () => { const r = await api('/api/social/check', {}); toast(r.note); renderSocialCard(el, r.social); });
+}
+
 async function renderVipCard(el, data) {
   if (!el) return;
   let vip;

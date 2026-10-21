@@ -18,6 +18,7 @@ import * as bili from './bili.mjs';
 import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
 import * as mind from './mind.mjs';
+import * as social from './social.mjs';
 import {
   ROOT, SHICHEN, localDate, logAction, todayCounts, addTask, addReview as addReviewRaw, readReview, updateReview,
   readConfig, readState, writeState, readActions, readJsonl, appendJsonl, FILES, nowIso, readTasks,
@@ -180,7 +181,7 @@ async function tick() {
   // 排队的 QQ 提醒：你一开口就补上（不受自动养号开关影响）
   notify.flushPending(readReview).catch(() => {});
   if (!live.running) mind.maybeReflect().catch(() => {});
-  if (!cfg.enabled || live.running) return;
+  if (!cfg.enabled || live.running || social.isBusy()) return;
 
   if (gap > 5 * 60_000) {
     logAction({ kind: 'wake', source: SRC, detail: `电脑醒了（睡了约 ${Math.round(gap / 60_000)} 分钟）` });
@@ -188,6 +189,17 @@ async function tick() {
 
   const state = readState();
   if (state.cooldownUntil && now < state.cooldownUntil) return;
+
+  // 隔一阵看一眼「回复我的」：有人回她，她自己决定回不回（social.mjs）
+  if (social.inboxDue(cfg)) {
+    try {
+      await social.checkInbox();
+    } catch (e) {
+      if (e.risk) { enterCooldown(cfg, e); return; }
+      console.error('[autopilot] 看消息失败', e.message);
+    }
+    return;
+  }
 
   // 特别关注：定期看一眼关注动态；有新视频且是「尽快」模式，就抽个几分钟后的时间去看
   if (cfg.vip.enabled && cfg.vip.users.length) {
@@ -510,7 +522,7 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
   abortCtl = new AbortController();
   const signal = abortCtl.signal;
   Object.assign(live, { running: true, startedAt: nowIso(), reason, step: '准备', video: null, done: 0, planned: 0 });
-  const summary = { watched: 0, liked: 0, shared: 0, coined: 0, favored: 0, commented: 0, queued: 0, seconds: 0 };
+  const summary = { watched: 0, liked: 0, shared: 0, coined: 0, favored: 0, commented: 0, joined: 0, queued: 0, seconds: 0 };
   const watchedList = [];
 
   logAction({ kind: 'session_start', source: SRC, detail: `开始刷B站（${reason}）` });
@@ -648,10 +660,18 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
           }
         }
         // 评论
+        let commented = null;
         const commentMood = !feel ? chance(cfg.comment.chance) : feel.score <= 2 ? false : chance(cfg.comment.chance * (feel.score >= 5 ? 2.5 : 1));
         if (cfg.comment.mode !== 'off' && !v.noReply && want(directive?.comment, vipCfg ? vipCfg.comment : commentMood)) {
-          const r = await maybeComment(cfg, v, w.played, { vipName: c.vip ? c.vipName : null });
-          if (r === 'posted') summary.commented++;
+          commented = await maybeComment(cfg, v, w.played, { vipName: c.vip ? c.vipName : null });
+          if (commented === 'posted') summary.commented++;
+          if (commented === 'queued') summary.queued++;
+        }
+        // 翻评论区，看到想接的热评就接一句（刚自己发过评论的就不再凑热闹了）
+        if (!commented && !signal.aborted) {
+          live.step = '翻评论区';
+          const r = await social.maybeJoin(v, feel, { signal });
+          if (r === 'posted') summary.joined++;
           if (r === 'queued') summary.queued++;
         }
       }
@@ -704,6 +724,7 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
     logAction({ kind: 'session_end', source: SRC, detail: text, meta: summary });
     live.step = '整理心情';
     await mind.afterSession(watchedList).catch(() => {});
+    social.peekSoon(); // 刷完了，过几分钟瞄一眼消息
     return { ok: true, summary: text, watched: watchedList };
   } catch (e) {
     if (e.risk) enterCooldown(cfg, e);
@@ -727,6 +748,7 @@ function summarize(s, aborted) {
   if (s.coined) parts.push(`投币 ${s.coined}`);
   if (s.favored) parts.push(`收藏 ${s.favored}`);
   if (s.commented) parts.push(`评论 ${s.commented}`);
+  if (s.joined) parts.push(`评论区搭话 ${s.joined}`);
   if (s.queued) parts.push(`${s.queued} 条评论待处理`);
   if (s.paused?.length) parts.push(`${s.paused.join('、')}暂停中没做`);
   return (aborted ? '被叫停：' : '') + parts.join('，');
@@ -882,6 +904,8 @@ async function diaryNow() {
 
 /** 看新回复 / @ → AI 起草回复进待审；私信只报数，不替你回 */
 async function inboxNow() {
+  // 开了「回复别人」：她自己看、自己决定回不回
+  if (social.socialOn() && readConfig().social.reply) return (await social.checkInbox()).note;
   const [replies, ats, unread] = await Promise.all([
     bili.replyFeed().catch(() => []),
     bili.atFeed().catch(() => []),

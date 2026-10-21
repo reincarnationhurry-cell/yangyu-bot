@@ -175,6 +175,21 @@ export const DEFAULT_CONFIG = {
     // true：AI 起草的评论进「待审」，你点头才发
     review: true,
   },
+  // 她的社交（social.mjs，需要配模型）：看视频时偶尔去热评下面接一句；有人回她，自己决定回不回
+  // 发不发先审跟着上面 comment.review 走；发出去的都过评论的保险丝
+  social: {
+    enabled: true,
+    join: true, // 看完视频，翻评论区时想接话就接
+    joinChance: 0.3, // 看完（没划走）之后有多大可能去评论区搭话；喜欢的视频会更高
+    joinDailyMax: 3,
+    reply: true, // 有人回她 / @她，自己决定回不回
+    replyDailyMax: 10,
+    checkMin: 40, // 多久看一眼「回复我的」（会随机抖动；刷完一轮也会顺手看一眼）
+    threadMax: 4, // 同一串楼里她最多回几次，聊太久就收住
+    likeChance: 0.5, // 顺手给对方的评论点个赞
+    quietStart: 1, // 深夜不回（从几点）
+    quietEnd: 8,
+  },
   diary: {
     // off / task / llm
     mode: 'task',
@@ -253,7 +268,7 @@ export function writeState(s) { writeJson(FILES.state, s); }
 // 就先别碰这个动作：第一次停 24 小时，连着再被拒就停 3 天、7 天。
 // 失败越多越像异常账号 —— 跟投币锁一个道理，只是不永久。
 export const ACTION_NAMES = {
-  like: '点赞', share: '分享', favorite: '收藏', dyn_like: '动态点赞', comment: '评论', follow: '关注',
+  like: '点赞', share: '分享', favorite: '收藏', dyn_like: '动态点赞', comment: '评论', follow: '关注', reply_like: '评论点赞',
 };
 export function readBlocks() {
   const all = readJson(FILES.blocks, {});

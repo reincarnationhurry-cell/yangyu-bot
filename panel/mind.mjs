@@ -56,7 +56,7 @@ export function allInterests(cfg = readConfig()) {
   return [...new Set([...cfg.interests, ...readMind().interests.map((x) => x.kw)])];
 }
 
-function stateText(m) {
+export function stateText(m = readMind()) {
   return [
     m.mood && `心情：${m.mood}`,
     m.obsession && `最近着迷：${m.obsession}`,
@@ -229,7 +229,7 @@ ${thoughts.slice(-20).join('\n')}
 }
 
 /** 写进 DSH 记忆插件当天的文件，格式和插件自己写的一样；目录不在（没装插件）就算了 */
-function remember(text) {
+export function remember(text) {
   if (!existsSync(MEMORY_DIR)) return;
   const d = new Date();
   const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -246,7 +246,8 @@ export function dayView() {
   const thoughts = acts
     .filter((a) => a.meta?.thought)
     .map((a) => ({ ts: a.ts, bvid: a.target, title: a.title, thought: a.meta.thought, score: a.meta.score, dug: !!a.meta.dug }));
-  const moments = acts.filter((a) => a.kind === 'mind' || a.kind === 'dig' || (a.kind === 'notify' && a.meta?.impulse))
+  const moments = acts.filter((a) => a.kind === 'mind' || a.kind === 'dig' || (a.kind === 'notify' && a.meta?.impulse) ||
+    (a.ok && a.source === 'auto' && (a.kind === 'join' || (a.kind === 'reply_comment' && a.meta?.auto))))
     .map((a) => ({ ts: a.ts, kind: a.kind, detail: a.detail }));
   return { mind: m, thoughts, moments, llm: llm.llmReady(), enabled: readConfig().mind.enabled };
 }

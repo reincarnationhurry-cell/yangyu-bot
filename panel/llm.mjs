@@ -7,7 +7,7 @@
  */
 import { readConfig, readSecrets } from './store.mjs';
 
-const PERSONA = `你是「蓝色大肥鱼」，一个在B站刷视频的女孩子，温柔为主，偶尔有点小傲娇、小毒舌。
+export const PERSONA = `你是「蓝色大肥鱼」，一个在B站刷视频的女孩子，温柔为主，偶尔有点小傲娇、小毒舌。
 说话像真人发评论：口语、简短、有自己的感受，不用书面语，不用分点，不用 emoji 堆砌。
 你绝不说自己是 AI，也不提代码、模型、机器人。`;
 
@@ -42,7 +42,7 @@ function explain(status, msg) {
   return m || `HTTP ${status}`;
 }
 
-async function chat(messages, { maxTokens = 300, temperature = 0.9 } = {}) {
+export async function chat(messages, { maxTokens = 300, temperature = 0.9 } = {}) {
   const cfg = readConfig().llm;
   let res;
   try {
@@ -195,18 +195,37 @@ export function heuristicPlan(note) {
   };
 }
 
-// 有的网关/模型会把 JSON 截掉尾巴（实测停在最后一个字段前），补个括号再试
-function looseJson(out) {
+// 有的网关/模型会把 JSON 截掉尾巴（实测停在半个字段、甚至半个字符串里），补齐再试
+export function looseJson(out) {
   const from = out.indexOf('{');
   if (from < 0) throw new Error('没有 JSON');
-  let body = out.slice(from);
+  const body = out.slice(from);
   const to = body.lastIndexOf('}');
   if (to >= 0) {
     try { return JSON.parse(body.slice(0, to + 1)); } catch { /* 往下补 */ }
   }
-  try { return JSON.parse(body.trim().replace(/,\s*$/, '') + '}'); } catch { /* 最后一个字段也断了 */ }
-  body = body.replace(/,\s*"[^"]*"?\s*:?\s*[^,}]*$/, '').replace(/,\s*$/, '');
-  return JSON.parse(body.endsWith('}') ? body : body + '}');
+  return JSON.parse(closeJson(body));
+}
+
+/** 按括号栈补齐被截断的 JSON：截在字符串里就收掉这个字符串，截在半个键值上就丢掉它 */
+function closeJson(body) {
+  const stack = [];
+  let inStr = false;
+  let esc = false;
+  for (const ch of body) {
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') inStr = true;
+    else if (ch === '{' || ch === '[') stack.push(ch);
+    else if (ch === '}' || ch === ']') stack.pop();
+  }
+  let t = body.replace(/\\$/, '');
+  if (inStr) t += '"';
+  // 「"key":」「"key"」这种只剩半截的键丢掉；末尾逗号丢掉
+  t = t.replace(/,\s*"[^"]*"\s*:?\s*$/, '').replace(/[,:]\s*$/, '');
+  return t + stack.reverse().map((c) => (c === '{' ? '}' : ']')).join('');
 }
 
 export async function parseTask(note) {

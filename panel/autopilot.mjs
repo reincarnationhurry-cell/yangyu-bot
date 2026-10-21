@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import * as bili from './bili.mjs';
 import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
+import * as mind from './mind.mjs';
 import {
   ROOT, SHICHEN, localDate, logAction, todayCounts, addTask, addReview as addReviewRaw, readReview, updateReview,
   readConfig, readState, writeState, readActions, readJsonl, appendJsonl, FILES, nowIso, readTasks,
@@ -178,6 +179,7 @@ async function tick() {
   const cfg = readConfig();
   // 排队的 QQ 提醒：你一开口就补上（不受自动养号开关影响）
   notify.flushPending(readReview).catch(() => {});
+  if (!live.running) mind.maybeReflect().catch(() => {});
   if (!cfg.enabled || live.running) return;
 
   if (gap > 5 * 60_000) {
@@ -238,13 +240,16 @@ export function stopSession() {
 }
 
 // ─── 挑视频 ────────────────────────────────────────────────
-async function pickCandidates(cfg, state) {
+// keywords：她这会儿自己想搜的（mind.planSession），有就先搜这个
+async function pickCandidates(cfg, state, keywords = []) {
   const s = cfg.session;
   const tried = new Set();
   const out = [];
   const seen = state.seen || {};
+  const queue = [...keywords];
+  const interests = mind.allInterests(cfg);
   for (let i = 0; i < 3 && out.length < s.videosMax * 2; i++) {
-    const src = weightedPick(s.sourceWeights);
+    const src = queue.length ? 'interest' : weightedPick(s.sourceWeights);
     if (tried.has(src) && src !== 'interest') continue;
     tried.add(src);
     let list = [];
@@ -252,7 +257,7 @@ async function pickCandidates(cfg, state) {
       if (src === 'feed') list = await bili.feedVideos(12);
       else if (src === 'hot') list = await bili.hotVideos(30);
       else {
-        const kw = cfg.interests[randInt(0, cfg.interests.length - 1)];
+        const kw = queue.shift() || interests[randInt(0, interests.length - 1)];
         if (!kw) continue;
         live.step = `搜「${kw}」`;
         list = await bili.searchVideo(kw, chance(0.6) ? 'totalrank' : 'pubdate');
@@ -477,6 +482,24 @@ async function directivePool(cfg, state, d) {
   return pickCandidates(cfg, state);
 }
 
+async function digFrom(v, feel, state, pool) {
+  const seen = state.seen || {};
+  const fresh = (x) => x.bvid && !seen[x.bvid] && !pool.some((p) => p.bvid === x.bvid) && x.bvid !== v.bvid &&
+    (!x.durationSec || (x.durationSec >= 20 && x.durationSec <= readConfig().session.maxDurationSec));
+  await bili.sleep(rand(2000, 6000));
+  if (feel.kw) {
+    live.step = `顺着搜「${feel.kw}」`;
+    const hit = (await bili.searchVideo(feel.kw)).filter(fresh).slice(0, 6);
+    if (hit.length) return { ...hit[randInt(0, hit.length - 1)], dug: true, why: `想搜「${feel.kw}」` };
+  }
+  if (v.owner && v.ownerUid) {
+    live.step = `去翻「${v.owner}」的视频`;
+    const hit = (await bili.searchVideo(v.owner, 'pubdate')).filter((x) => x.ownerUid === v.ownerUid && fresh(x)).slice(0, 6);
+    if (hit.length) return { ...hit[randInt(0, hit.length - 1)], dug: true, why: `去翻了「${v.owner}」的其他视频` };
+  }
+  return null;
+}
+
 export async function runSession({ reason = '手动', slotKey, videos, vipOnly = false, directive = null } = {}) {
   if (live.running) return { ok: false, summary: '已经在刷了' };
   const cfg = readConfig();
@@ -516,7 +539,8 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
       pool = vipList;
       n = vipList.length;
     } else {
-      const extra = await pickCandidates(cfg, state);
+      const thinking = await mind.planSession();
+      const extra = await pickCandidates(cfg, state, thinking?.keywords);
       pool = [...vipList, ...extra.filter((x) => !vipList.some((v) => v.bvid === x.bvid))];
       n = vipList.length + Math.min(extra.length, randInt(cfg.session.videosMin, cfg.session.videosMax));
     }
@@ -526,6 +550,8 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
     let needShare = cfg.share.daily && !exp.share;
     let lastWatched = null;
     let needCoin = cfg.coin.enabled && !bili.coinLock() && (exp.coinsExp || 0) < cfg.coin.dailyMax * 10 && acct.coins >= 1;
+    const canDig = !videos?.length && !directive && !vipOnly;
+    let digs = 0;
 
     for (let i = 0; i < n && !signal.aborted; i++) {
       const c = pool[i];
@@ -555,11 +581,16 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
       });
       summary.watched++;
       summary.seconds += w.played;
-      watchedList.push({ bvid: v.bvid, title: v.title, owner: v.owner });
+      live.step = '想了想';
+      const feel = await mind.react(v, { played: w.played, skipped: plan.skipped });
+      watchedList.push({ bvid: v.bvid, title: v.title, owner: v.owner, thought: feel?.thought, score: feel?.score });
       logAction({
         kind: 'watch', source: SRC, target: v.bvid, title: v.title,
         detail: `${plan.skipped ? '划走了' : '看了'}《${v.title}》${fmtSec(w.played)} / ${fmtSec(v.duration)}`,
-        meta: { played: w.played, duration: v.duration, owner: v.owner, vip: !!c.vip },
+        meta: {
+          played: w.played, duration: v.duration, owner: v.owner, vip: !!c.vip,
+          ...(feel ? { thought: feel.thought, score: feel.score, dug: !!c.dug } : {}),
+        },
       });
       appendDiaryFragment({ type: 'watch', bvid: v.bvid, title: v.title });
       state.seen = state.seen || {};
@@ -571,7 +602,9 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
         const counts = todayCounts();
         // 点赞：特别关注的必点，其他随缘
         let liked = false;
-        if ((vipCfg ? vipCfg.like : want(directive?.like, chance(cfg.like.chance))) && (counts.like || 0) < cfg.like.dailyMax) {
+        // 有内心独白时按喜欢程度来：4~5 分多半会点，1~2 分不点
+        const likeMood = !feel ? chance(cfg.like.chance) : feel.score >= 4 ? chance(0.75) : feel.score <= 2 ? false : chance(cfg.like.chance);
+        if ((vipCfg ? vipCfg.like : want(directive?.like, likeMood)) && (counts.like || 0) < cfg.like.dailyMax) {
           await bili.sleep(rand(1500, 5000), signal);
           const r = await tryAction('like', v, () => bili.likeVideo(v.bvid, true), summary);
           if (r.ok) {
@@ -615,13 +648,26 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
           }
         }
         // 评论
-        if (cfg.comment.mode !== 'off' && !v.noReply && want(directive?.comment, vipCfg ? vipCfg.comment : chance(cfg.comment.chance))) {
+        const commentMood = !feel ? chance(cfg.comment.chance) : feel.score <= 2 ? false : chance(cfg.comment.chance * (feel.score >= 5 ? 2.5 : 1));
+        if (cfg.comment.mode !== 'off' && !v.noReply && want(directive?.comment, vipCfg ? vipCfg.comment : commentMood)) {
           const r = await maybeComment(cfg, v, w.played, { vipName: c.vip ? c.vipName : null });
           if (r === 'posted') summary.commented++;
           if (r === 'queued') summary.queued++;
         }
       }
       if (c.vip) dropFromVipQueue(c.bvid, { countDone: true });
+
+      // 顺藤摸瓜：看上头了，就顺着这个 UP 主 / 这个话题再看一个
+      if (canDig && feel?.dig && digs < cfg.mind.digMax && !signal.aborted) {
+        const next = await digFrom(v, feel, state, pool).catch((e) => { if (e.risk) throw e; return null; });
+        if (next) {
+          digs++;
+          pool.splice(i + 1, 0, next);
+          n++;
+          live.planned = n;
+          logAction({ kind: 'dig', source: SRC, target: next.bvid, title: next.title, detail: `顺着《${v.title}》${next.why}，接着看《${next.title}》` });
+        }
+      }
 
       live.video = null;
       if (i < n - 1) {
@@ -656,6 +702,8 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
 
     const text = summarize(summary, signal.aborted);
     logAction({ kind: 'session_end', source: SRC, detail: text, meta: summary });
+    live.step = '整理心情';
+    await mind.afterSession(watchedList).catch(() => {});
     return { ok: true, summary: text, watched: watchedList };
   } catch (e) {
     if (e.risk) enterCooldown(cfg, e);

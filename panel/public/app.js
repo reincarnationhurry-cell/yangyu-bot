@@ -112,6 +112,7 @@ const KIND = {
   session_start: ['🐟', '开始刷'], session_end: ['🏁', '刷完了'], draft: ['📝', '起草'], diary: ['📔', '发日记'],
   cooldown: ['🧊', '风控冷却'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
   login: ['🔑', '登录'], notify: ['📮', 'QQ 提醒'], favorite: ['⭐', '收藏'], vip_new: ['🌟', '特别关注更新'], dyn_like: ['👍', '动态点赞'], vip: ['🌟', '特别关注'], follow: ['➕', '关注'],
+  mind: ['💭', '心里想'], dig: ['🕳️', '顺藤摸瓜'],
 };
 const SOURCE = { auto: ['自动', 'blue'], panel: ['面板', 'violet'], bot: ['QQ里的她', 'pink'] };
 
@@ -247,6 +248,7 @@ async function pageOverview(main) {
      <div class="grid g-3">
        <div class="span-2 grid">
          <div class="card" id="apCard"></div>
+         <div class="card" id="ovDay"></div>
          <div class="card"><div class="card-h"><h2>近 14 天看视频数</h2><span class="small muted">鼠标移上去看当天明细</span></div><div id="ovChart" class="chart"></div></div>
        </div>
        <div class="grid">
@@ -260,9 +262,32 @@ async function pageOverview(main) {
   const ol = $('#ovLogin');
   if (ol) ol.onclick = () => openLogin();
   renderApCard($('#apCard'), ap);
+  renderDay($('#ovDay'));
   renderChart($('#ovChart'), ov.series);
   const r = await api('/api/actions?limit=6').catch(() => ({ list: [] }));
   $('#ovRecent').innerHTML = r.list.length ? `<ul class="tl compact">${r.list.map((x) => tlItem(x, true)).join('')}</ul>` : '<div class="empty">还没有动作</div>';
+}
+
+// 她的一天：心情、着迷的东西、今天心里想过的、最近的她
+async function renderDay(el) {
+  let d;
+  try { d = await api('/api/mind'); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  const m = d.mind;
+  if (!d.llm || !d.enabled) {
+    el.innerHTML = `<div class="card-h"><h2>🐟 她的一天</h2></div><div class="empty">${d.llm ? '「内心」关着（autopilot.json 里 mind.enabled）' : '配了模型（自动养号 → 模型设置）她才会有自己的心思'}</div>`;
+    return;
+  }
+  const state = [['心情', m.mood], ['最近着迷', m.obsession], ['还在想', m.thought], ['小目标', m.goal]]
+    .filter(([, v]) => v).map(([k, v]) => `<div><span class="k">${k}</span>${esc(v)}</div>`).join('');
+  const grown = m.interests.length ? `<div class="tags" style="margin-top:8px">${m.interests.map((x) => `<span class="chip violet" title="${esc(x.at)} 迷上的">${esc(x.kw)}</span>`).join('')}</div>` : '';
+  const lines = [...d.thoughts.map((t) => ({ ts: t.ts, html: `<b>《${esc(t.title)}》</b>${t.dug ? ' <span class="chip">顺藤摸瓜</span>' : ''}<div class="thought">💭 ${esc(t.thought)} <span class="muted">${'♥'.repeat(t.score || 0)}</span></div>`, bvid: t.bvid })),
+    ...d.moments.filter((x) => x.kind !== 'dig').map((x) => ({ ts: x.ts, html: esc(x.detail) }))].sort((a, b) => (a.ts < b.ts ? -1 : 1));
+  const last = m.selfHistory[m.selfHistory.length - 1];
+  el.innerHTML = `<div class="card-h"><h2>🐟 她的一天</h2><span class="small muted">${m.updatedAt ? '更新于 ' + hm(m.updatedAt) : ''}</span></div>
+    <div class="mind-state">${state || '<span class="muted">还没刷过，心里空空的</span>'}</div>${grown}
+    ${lines.length ? `<ul class="tl compact" style="margin-top:10px">${lines.map((l) => `<li ${l.bvid ? `data-bvid="${esc(l.bvid)}" style="cursor:pointer"` : ''}><div class="time num">${hm(l.ts)}</div><div class="ico">•</div><div class="body">${l.html}</div></li>`).join('')}</ul>` : '<div class="empty">今天还没有心里话</div>'}
+    ${m.self ? `<details style="margin-top:10px"><summary class="small">最近的她${last?.changed ? ` · ${esc(last.date)}：${esc(last.changed)}` : ''}</summary><p class="small">${esc(m.self)}</p>
+      ${m.selfHistory.length > 1 ? `<div class="small muted">${m.selfHistory.slice(-8, -1).reverse().map((h) => `${esc(h.date)}${h.changed ? '：' + esc(h.changed) : ''}`).join('<br>')}</div>` : ''}</details>` : ''}`;
 }
 
 // 点赞 / 分享被 B站 拦着时她想点的视频：你在自己浏览器里点，B站 认真浏览器
@@ -411,6 +436,7 @@ function tlItem(a, compact) {
     <div class="time num">${hm(a.ts)}</div>
     <div class="ico ${esc(a.kind)}">${ico}</div>
     <div class="body"><div class="x">${esc(compact ? text.slice(0, 60) : text)}</div>
+      ${a.meta?.thought ? `<div class="thought">💭 ${esc(a.meta.thought)}${a.meta.score ? ` <span class="muted">${'♥'.repeat(a.meta.score)}</span>` : ''}</div>` : ''}
       <div class="m"><span class="chip ${src[1]}">${src[0]}</span>${compact ? '' : `<span>${name}</span>`}${a.error ? `<span class="err">${esc(a.error)}</span>` : ''}</div></div>
   </li>`;
 }
@@ -425,7 +451,7 @@ async function pageActivity(main) {
           <option value="">所有动作</option>
           <option value="watch">看视频</option><option value="like">点赞</option><option value="comment,reply_comment">评论 / 回复</option>
           <option value="share,coin">分享 / 投币</option><option value="dm_send">私信</option><option value="session_start,session_end">每一轮</option>
-          <option value="error,cooldown">出错 / 风控</option>
+          <option value="mind,dig">心里想 / 顺藤摸瓜</option><option value="error,cooldown">出错 / 风控</option>
         </select>
         <input type="date" id="dateIn" value="${esc(F.date)}" style="width:auto">
         <input id="qIn" placeholder="搜标题 / 内容" value="${esc(F.q)}" style="width:200px">

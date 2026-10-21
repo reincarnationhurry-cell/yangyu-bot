@@ -223,6 +223,9 @@ label.f { display: block; font-size: 12px; color: var(--text2); margin-bottom: 5
 .tl .body .x { word-break: break-word; }
 .tl .body .m { font-size: 12px; color: var(--muted); margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .tl li.bad .x { color: var(--red); }
+.tl .thought, .thought { font-size: 13px; color: var(--text); opacity: .85; margin-top: 3px; font-style: italic; }
+.mind-state { display: grid; gap: 4px; font-size: 14px; }
+.mind-state .k { display: inline-block; min-width: 64px; color: var(--muted); font-size: 12px; }
 .tl.compact .x { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl.compact li { padding: 6px 4px; }
 .ico.watch { background: var(--blue-soft); } .ico.like { background: var(--pink-soft); } .ico.comment, .ico.reply_comment { background: var(--violet-soft); }

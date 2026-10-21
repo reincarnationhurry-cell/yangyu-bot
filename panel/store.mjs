@@ -155,6 +155,15 @@ export const DEFAULT_CONFIG = {
     maxDurationSec: 1500,
   },
   interests: ['天文', '猫', '周易', '美食', '纪录片', '治愈'],
+  // 她的内心（mind.mjs，需要配模型）：刷之前想想今天想看什么、每个视频留一句内心独白、
+  // 顺着喜欢的往下挖、刷完更新心情和兴趣、见闻写进 DSH 记忆、每晚反思一次
+  mind: {
+    enabled: true,
+    digMax: 2, // 一轮最多顺藤摸瓜几次
+    memory: true, // 见闻和反思写进 DSH 的工作区记忆，QQ 里的她就知道自己刷了什么
+    impulse: true, // 刷到特别想分享的，号主一小时内说过话就主动发一句（每天最多 1 次）
+    reflectHour: 22, // 几点以后做当天的反思
+  },
   like: { chance: 0.35, dailyMax: 15 },
   share: { daily: true },
   coin: { enabled: false, dailyMax: 1 },

@@ -216,6 +216,26 @@ export async function reportTask(task, { ok, note, watched = [] }) {
   }
 }
 
+/**
+ * 她刷到特别想给你看的东西，自己忍不住说一句（mind.mjs 决定什么时候想说）。
+ * 不排队：过了回复窗口再补发就不是「刚刷到」了；深夜免打扰照样生效。
+ */
+export async function impulse(text) {
+  const cfg = readConfig().notify;
+  if (quiet(cfg)) return { sent: false, why: 'quiet' };
+  if (!lastOwnerMessage()?.fresh) return { sent: false, why: 'window' };
+  try {
+    await rawSend(text);
+    const st = readState();
+    st.log = [...(st.log || []), { ts: nowIso(), ok: true, impulse: true, text: text.slice(0, 60) }].slice(-30);
+    writeState(st);
+    logAction({ kind: 'notify', source: 'auto', detail: `忍不住跟你说：${text.split('\n')[0]}`, meta: { impulse: true } });
+    return { sent: true };
+  } catch (e) {
+    return { sent: false, why: e.message };
+  }
+}
+
 function composeTaskReport(task, { ok, note, watched }) {
   const what = (task.note || task.type).slice(0, 30);
   if (!ok) return `「${what}」没做成 qwq：${note}`;

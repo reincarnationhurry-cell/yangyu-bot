@@ -295,7 +295,7 @@ async function tryAction(kind, v, fn, summary) {
   const name = ACTION_NAMES[kind] || kind;
   if (blockedFor(kind)) {
     if (summary) (summary.paused ||= new Set()).add(name);
-    // 接口被拦的点赞 / 分享：记进清单，号主在自己浏览器里顺手点掉
+    // 接口被拦的点赞 / 分享：记进清单，号主在面板开「她的浏览器」顺手点掉
     if ((kind === 'like' || kind === 'share') && v?.bvid) addWish({ kind, bvid: v.bvid, title: v.title, owner: v.owner });
     return { ok: false, blocked: true };
   }

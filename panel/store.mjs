@@ -279,7 +279,7 @@ export async function withBlock(kind, fn) {
   }
 }
 // ─── 「想点没点成」清单 ────────────────────────────────────
-// 点赞 / 分享 / 投币被 B站 拦着时，她想点的视频记在这里，你在自己浏览器里顺手点掉。
+// 点赞 / 分享 / 投币被 B站 拦着时，她想点的视频记在这里，你在面板开「她的浏览器」（browser.mjs）顺手点掉。
 // 真浏览器里的点击 B站 是认的（投币就是这么验证的）。
 const WISH_FILE = join(DATA, 'wishes.json');
 export function readWishes() {

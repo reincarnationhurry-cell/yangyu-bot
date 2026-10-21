@@ -17,6 +17,7 @@ import * as bili from './bili.mjs';
 import * as llm from './llm.mjs';
 import * as auto from './autopilot.mjs';
 import * as notify from './notify.mjs';
+import { openAsHer } from './browser.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
   readReview, updateReview, readConfig, writeConfig, readSecrets, writeSecrets,
@@ -409,9 +410,14 @@ const routes = {
   },
   'POST /api/review/reject': async (_q, b) => { auto.rejectReview(b.id, 'panel'); return { ok: true }; },
 
-  // 接口被拦、等你在浏览器里点的
+  // 接口被拦、等你在「她的浏览器」里点的
   'GET /api/wishes': async () => ({ list: readWishes() }),
   'POST /api/wishes/done': async (_q, b) => { finishWish(b.id || '*'); return { list: readWishes() }; },
+  // 在「她的浏览器」里打开：共用引擎的登录态，不用（也不能）在浏览器里重新登录她的号
+  'POST /api/browser/open': async (_q, b) => {
+    if (!/^BV\w{10}$/.test(b.bvid || '')) throw new Error('要给 BV 号');
+    return openAsHer(`https://www.bilibili.com/video/${b.bvid}`);
+  },
 
   // QQ 提醒
   'POST /api/notify/test': async () => ({ ok: true, ...(await notify.sendOwner('🐟 测试一下：以后有要你审的东西，我会在这里叫你～')) }),

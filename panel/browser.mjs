@@ -98,10 +98,10 @@ async function withCdp(wsUrl, fn) {
     pending.delete(m.id);
     m.error ? p.bad(new Error(m.error.message)) : p.ok(m.result);
   };
-  const send = (method, params = {}) => new Promise((ok, bad) => {
+  const send = (method, params = {}, sessionId) => new Promise((ok, bad) => {
     const id = ++seq;
     pending.set(id, { ok, bad });
-    ws.send(JSON.stringify({ id, method, params }));
+    ws.send(JSON.stringify({ id, method, params, sessionId }));
   });
   try {
     return await fn(send);
@@ -137,8 +137,12 @@ export async function openAsHer(url) {
   const cookies = await sessionCookies();
   const wsUrl = (await existingEndpoint()) || (await launch());
   await withCdp(wsUrl, async (send) => {
-    await send('Storage.setCookies', { cookies });
-    const { targetId } = await send('Target.createTarget', { url: u.href });
+    // 新版 Chrome 不让在浏览器级别 Storage.setCookies（报 Browser context management is not supported），
+    // 所以先开个空白页，挂到它上面用 Network.setCookies 塞，再跳到视频
+    const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
+    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+    await send('Network.setCookies', { cookies }, sessionId);
+    await send('Page.navigate', { url: u.href }, sessionId);
     await send('Target.activateTarget', { targetId }).catch(() => {});
   });
   return { ok: true };

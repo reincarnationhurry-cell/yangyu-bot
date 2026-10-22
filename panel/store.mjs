@@ -163,6 +163,7 @@ export const DEFAULT_CONFIG = {
     memory: true, // 见闻和反思写进 DSH 的工作区记忆，QQ 里的她就知道自己刷了什么
     impulse: true, // 刷到特别想分享的，号主一小时内说过话就主动发一句（每天最多 1 次）
     reflectHour: 22, // 几点以后做当天的反思
+    subtitles: true, // 认真看了的视频读一下字幕（CC 或 B站 AI 字幕），独白照着她真看到的内容说
   },
   like: { chance: 0.35, dailyMax: 15 },
   share: { daily: true },

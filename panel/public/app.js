@@ -281,14 +281,30 @@ async function renderDay(el) {
   const state = [['心情', m.mood], ['最近着迷', m.obsession], ['还在想', m.thought], ['小目标', m.goal]]
     .filter(([, v]) => v).map(([k, v]) => `<div><span class="k">${k}</span>${esc(v)}</div>`).join('');
   const grown = m.interests.length ? `<div class="tags" style="margin-top:8px">${m.interests.map((x) => `<span class="chip violet" title="${esc(x.at)} 迷上的">${esc(x.kw)}</span>`).join('')}</div>` : '';
-  const lines = [...d.thoughts.map((t) => ({ ts: t.ts, html: `<b>《${esc(t.title)}》</b>${t.dug ? ' <span class="chip">顺藤摸瓜</span>' : ''}<div class="thought">💭 ${esc(t.thought)} <span class="muted">${'♥'.repeat(t.score || 0)}</span></div>`, bvid: t.bvid })),
+  const lines = [...d.thoughts.map((t) => ({ ts: t.ts, html: `<b>《${esc(t.title)}》</b>${t.dug ? ' <span class="chip">顺藤摸瓜</span>' : ''}${t.heard ? `<div class="small muted">🎧 ${esc(t.heard)}${t.up ? ` · UP：${esc(t.up)}` : ''}</div>` : ''}<div class="thought">💭 ${esc(t.thought)} <span class="muted">${'♥'.repeat(t.score || 0)}</span></div>`, bvid: t.bvid })),
     ...d.moments.filter((x) => x.kind !== 'dig').map((x) => ({ ts: x.ts, html: esc(x.detail) }))].sort((a, b) => (a.ts < b.ts ? -1 : 1));
   const last = m.selfHistory[m.selfHistory.length - 1];
   el.innerHTML = `<div class="card-h"><h2>🐟 她的一天</h2><span class="small muted">${m.updatedAt ? '更新于 ' + hm(m.updatedAt) : ''}</span></div>
     <div class="mind-state">${state || '<span class="muted">还没刷过，心里空空的</span>'}</div>${grown}
     ${lines.length ? `<ul class="tl compact" style="margin-top:10px">${lines.map((l) => `<li ${l.bvid ? `data-bvid="${esc(l.bvid)}" style="cursor:pointer"` : ''}><div class="time num">${hm(l.ts)}</div><div class="ico">•</div><div class="body">${l.html}</div></li>`).join('')}</ul>` : '<div class="empty">今天还没有心里话</div>'}
     ${m.self ? `<details style="margin-top:10px"><summary class="small">最近的她${last?.changed ? ` · ${esc(last.date)}：${esc(last.changed)}` : ''}</summary><p class="small">${esc(m.self)}</p>
-      ${m.selfHistory.length > 1 ? `<div class="small muted">${m.selfHistory.slice(-8, -1).reverse().map((h) => `${esc(h.date)}${h.changed ? '：' + esc(h.changed) : ''}`).join('<br>')}</div>` : ''}</details>` : ''}`;
+      ${m.selfHistory.length > 1 ? `<div class="small muted">${m.selfHistory.slice(-8, -1).reverse().map((h) => `${esc(h.date)}${h.changed ? '：' + esc(h.changed) : ''}`).join('<br>')}</div>` : ''}</details>` : ''}
+    <details style="margin-top:6px" id="memBox"><summary class="small">她的记忆（${d.memory?.total || 0} 条，最近的在上面；记错了就删）</summary><div id="memList"></div></details>`;
+  renderMemories($('#memList', el), d.memory);
+}
+
+const MEM_KIND = { watch: '📺', session: '🐟', social: '💬', self: '🌙' };
+function renderMemories(box, mem) {
+  if (!box) return;
+  const list = mem?.recent || [];
+  box.innerHTML = list.length
+    ? `<ul class="vip-list">${list.map((e) => `<li><div style="flex:1;min-width:0" class="small">${MEM_KIND[e.kind] || '•'} ${esc(e.text)}
+        <div class="muted">${ago(e.ts)} · 重要 ${e.imp}/5${e.seen ? ' · 最近想起过' : ''}</div></div>
+        <button class="btn sm ghost" data-memdel="${esc(e.id)}" title="删掉这条">✕</button></li>`).join('')}</ul>`
+    : '<div class="empty">还什么都没记</div>';
+  $$('[data-memdel]', box).forEach((b) => (b.onclick = () => busy(b, async () => {
+    renderMemories(box, await api('/api/memory/delete', { id: b.dataset.memdel }));
+  })));
 }
 
 // 点赞 / 分享被 B站 拦着时她想点的视频：你在自己浏览器里点，B站 认真浏览器

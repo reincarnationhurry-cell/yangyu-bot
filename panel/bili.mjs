@@ -246,6 +246,31 @@ export async function browseVideo(bvid) {
   };
 }
 
+// ─── 字幕：她「听到」了什么 ───────────────────────────────
+// player/wbi/v2 列出这个分 P 的字幕轨：UP 主上传的 CC 字幕，或 B站 自动生成的 AI 字幕（ai-zh，要登录才给）。
+// 字幕地址是 //aisubtitle.hdslb.com/... 这种不带协议的。拿不到返回 null —— 没字幕不等于视频里没人说话。
+// 坑：这个接口偶尔会串台给别的视频的字幕，所以核对一下返回的 cid。
+export async function videoSubtitle(bvid, cid) {
+  const signed = await signWbi({ bvid, cid: String(cid) });
+  const r = await jget('https://api.bilibili.com/x/player/wbi/v2?' + new URLSearchParams(signed));
+  if (r.code !== 0) throw new BiliError(`取字幕失败：${r.message}`, r.code);
+  if (r.data?.cid && String(r.data.cid) !== String(cid)) return null;
+  const tracks = r.data?.subtitle?.subtitles || [];
+  const zh = (t) => /zh|中文/i.test(`${t.lan} ${t.lan_doc}`);
+  const isAi = (t) => String(t.lan).startsWith('ai-');
+  const pick = tracks.find((t) => zh(t) && !isAi(t)) || tracks.find(zh) || tracks[0];
+  if (!pick?.subtitle_url) return null;
+  const url = pick.subtitle_url.startsWith('//') ? `https:${pick.subtitle_url}` : pick.subtitle_url;
+  const res = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://www.bilibili.com' }, signal: AbortSignal.timeout(15000) });
+  if (res.status === 412) throw new BiliError('请求被风控拦截（HTTP 412）', 412);
+  const j = await res.json().catch(() => ({}));
+  const lines = (j.body || [])
+    .map((x) => ({ from: Number(x.from) || 0, to: Number(x.to) || 0, text: String(x.content || '').trim() }))
+    .filter((x) => x.text);
+  if (!lines.length) return null;
+  return { source: isAi(pick) ? 'ai' : 'cc', lan: pick.lan_doc || pick.lan, lines };
+}
+
 function mapReply(x) {
   return {
     rpid: String(x.rpid),

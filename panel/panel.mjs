@@ -18,6 +18,7 @@ import * as llm from './llm.mjs';
 import * as auto from './autopilot.mjs';
 import * as notify from './notify.mjs';
 import * as mind from './mind.mjs';
+import * as memory from './memory.mjs';
 import * as social from './social.mjs';
 import { openAsHer } from './browser.mjs';
 import {
@@ -429,6 +430,8 @@ const routes = {
 
   // 她的内心
   'GET /api/mind': async () => mind.dayView(),
+  // 她的记忆流：记错了的可以删
+  'POST /api/memory/delete': async (_q, b) => ({ ok: memory.remove(String(b.id || '')), ...memory.memoryView(15) }),
   'POST /api/social/check': async () => {
     if (!social.socialOn()) throw new Error('先打开「评论区社交」并配好模型');
     const r = await social.checkInbox();

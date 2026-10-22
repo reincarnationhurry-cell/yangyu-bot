@@ -6,6 +6,9 @@
  *
  *  1. 刷之前（planSession）：看看自己的心情、最近着迷的东西，决定今天想搜什么。
  *  2. 每看完一个（react）：留一句内心独白，打个喜欢程度，想不想顺着往下挖。
+ *     有字幕就读她真正看到的那一段，独白里分开记「视频里讲了什么（带时间）/ UP 主怎么看 / 我怎么想」，
+ *     时间戳和内容由代码核对，对不上就不算「看到了」；没字幕就只凭标题和评论，不许编。
+ *     顺便想起以前相关的经历（memory.mjs），看完记一条进记忆流。
  *     喜欢程度会影响点赞 / 评论；想挖就顺着 UP 主或关键词再看一个（autopilot 里做）。
  *  3. 刷完（afterSession）：更新心情、着迷的东西、兴趣，写一句第一人称见闻进 DSH 记忆
  *     —— QQ 里的她就知道自己刷了什么；特别想分享的，号主刚好在线就主动说一句。
@@ -18,6 +21,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
+import * as memory from './memory.mjs';
 import { ROOT, DATA, localDate, logAction, readConfig, readActions, nowIso } from './store.mjs';
 
 const FILE = join(DATA, 'mind.json');
@@ -66,6 +70,8 @@ export function stateText(m = readMind()) {
   ].filter(Boolean).join('\n') || '（还没什么特别的状态）';
 }
 
+const { fence } = llm;
+
 const ask = async (system, user, maxTokens = 500) =>
   llm.looseJson(await llm.chat([{ role: 'system', content: `${llm.PERSONA}\n${system}` }, { role: 'user', content: user }], { maxTokens }));
 
@@ -79,13 +85,14 @@ const str = (v, max) => {
 export async function planSession() {
   if (!mindOn()) return null;
   const m = readMind();
-  const recent = readActions().filter((a) => a.kind === 'watch' && a.ok).slice(-12).map((a) => `《${a.title}》`).join('、');
+  const recent = readActions().filter((a) => a.kind === 'watch' && a.ok).slice(-12).map((a) => `《${fence(a.title, 40)}》`).join('、');
+  const past = memory.recallText([m.obsession, m.goal, m.thought].join(' '), { k: 3 });
   try {
     const j = await ask(
       '你要打开B站随便刷一会儿。只输出 JSON。',
       `${stateText(m)}
 最近看过：${recent || '（还没有）'}
-你感兴趣过的方向：${allInterests().join('、')}
+${past ? `你想起以前的事：\n${past}\n` : ''}你感兴趣过的方向：${allInterests().join('、')}
 现在是 ${new Date().getHours()} 点。
 
 想想这会儿想看点什么：可以接着最近着迷的，也可以突然想换换口味。输出：
@@ -105,27 +112,94 @@ export async function planSession() {
 }
 
 // ─── 2. 每看完一个：内心独白 ─────────────────────────────────
-export async function react(v, { played, skipped }) {
+const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+
+/**
+ * 把字幕压成给模型看的一段：只要她真看到的部分（played 之前），每 ~30 秒并成一行带时间，
+ * 太长就均匀抽样。返回 { text, upTo（覆盖到第几秒）}；没东西返回 null。
+ */
+export function transcriptText(sub, played, max = 1600) {
+  const lines = (sub?.lines || []).filter((l) => l.from < played);
+  if (!lines.length) return null;
+  const chunks = [];
+  for (const l of lines) {
+    const last = chunks[chunks.length - 1];
+    if (last && l.from - last.from < 30) last.text += ` ${l.text}`;
+    else chunks.push({ from: l.from, text: l.text });
+  }
+  let rows = chunks.map((c) => `[${mmss(c.from)}] ${c.text}`);
+  const total = rows.reduce((n, r) => n + r.length + 1, 0);
+  if (total > max) {
+    const keep = Math.max(3, Math.floor(rows.length * (max / total)));
+    const step = rows.length / keep;
+    rows = Array.from({ length: keep }, (_, i) => rows[Math.floor(i * step)]);
+  }
+  return { text: rows.join('\n').slice(0, max), upTo: Math.min(played, lines[lines.length - 1].to || played) };
+}
+
+/**
+ * 「视频里讲了什么」要对得上：时间戳得落在她看到的范围里，内容得跟那附近的字幕有重合。
+ * 对不上就当她没看到（返回 null），宁可少说，别瞎编。
+ */
+export function checkHeard(heard, sub, upTo) {
+  const t = String(heard || '').trim();
+  const m = t.match(/(\d{1,3})[:：](\d{2})/);
+  if (!t || !m) return null;
+  const at = Number(m[1]) * 60 + Number(m[2]);
+  if (at > upTo + 15) return null;
+  const near = sub.lines.filter((l) => Math.abs(l.from - at) <= 45).map((l) => l.text).join('');
+  const body = t.replace(m[0], '').replace(/[^一-鿿A-Za-z0-9]/g, '');
+  if (body.length < 2) return null;
+  const pairs = [];
+  for (let i = 0; i < body.length - 1; i++) pairs.push(body.slice(i, i + 2));
+  const hit = pairs.filter((p) => near.includes(p)).length;
+  return hit / pairs.length >= 0.25 ? { text: t, at } : null;
+}
+
+export async function react(v, { played, skipped, sub = null }) {
   if (!mindOn()) return null;
   const m = readMind();
-  const top = (v.comments || []).slice(0, 5).map((c) => `- ${c.text.slice(0, 50)}`).join('\n');
+  const top = (v.comments || []).slice(0, 5).map((c) => `- ${fence(c.text, 50)}`).join('\n');
+  const tx = !skipped && sub ? transcriptText(sub, played) : null;
+  const past = memory.recallText(`${v.title} ${v.owner} ${v.tname || ''}`, { keys: [v.owner && `up:${v.owner}`], k: 3 });
+  const seen = tx
+    ? `你看的这段里听到的（${sub.source === 'ai' ? 'B站自动识别的字幕，可能有错字' : 'UP主上传的字幕'}，只到 ${mmss(tx.upTo)}，后面你没看）：
+${fence(tx.text, 1700)}
+
+独白分三样说清楚，别混在一起：视频里讲了什么（照字幕说，带上时间，比如「3:20 说土星环其实很薄」）/ UP主自己的看法 / 你自己怎么想。
+没看到的部分不要猜。`
+    : '你只知道上面这些（没有字幕），不要编视频里讲了什么。';
   try {
     const j = await ask(
       '这是你自己心里想的，不会发出去。只输出 JSON。',
       `${stateText(m)}
 
-你刚${skipped ? '扫了一眼就划走了' : `看了 ${Math.round(played)} 秒`}：《${v.title}》（${v.owner}，${v.tname || '未知分区'}，总长 ${v.duration} 秒）
-简介：${String(v.desc || '').slice(0, 150)}
+你刚${skipped ? '扫了一眼就划走了' : `看了 ${Math.round(played)} 秒`}：《${fence(v.title, 80)}》（${fence(v.owner, 30)}，${v.tname || '未知分区'}，总长 ${v.duration} 秒）
+简介：${fence(v.desc, 150)}
 热评：
 ${top || '（没有）'}
-
-你只知道上面这些，不要编视频里讲了什么。心情只是背景，独白要说**这个视频**本身（标题、UP主、热评里的东西），别句句都绕回自己的心情。
+${past ? `\n看到这个，你想起以前的事（可以自然联想，也可以不提）：\n${past}\n` : ''}
+${seen}
+心情只是背景，独白要说**这个视频**本身，别句句都绕回自己的心情。
 打分要拉开：一般般就 2~3，真戳到你才 4，5 是难得一遇。输出：
-{"thought":"一句内心独白，第一人称、口语、可以吐槽可以走神，40字内","score":喜欢程度1到5,"dig":想不想顺着再看一个同UP主或同话题的(true/false),"kw":"想顺着搜的词，不想就空字符串"}`,
-      300,
+{${tx ? '"heard":"视频里讲的一件具体的事，以时间开头，30字内","up":"UP主自己的观点，没有明显观点就空字符串",' : ''}"thought":"一句内心独白，第一人称、口语、可以吐槽可以走神，40字内","score":喜欢程度1到5,"dig":想不想顺着再看一个同UP主或同话题的(true/false),"kw":"想顺着搜的词，不想就空字符串"}`,
+      tx ? 450 : 300,
     );
     const score = Math.max(1, Math.min(5, Math.round(Number(j.score) || 3)));
-    return { thought: str(j.thought, 80), score, dig: j.dig === true && !skipped, kw: str(j.kw, 20) };
+    const heard = tx ? checkHeard(str(j.heard, 60), sub, tx.upTo) : null;
+    const feel = {
+      thought: str(j.thought, 80), score, dig: j.dig === true && !skipped, kw: str(j.kw, 20),
+      heard: heard?.text || '', up: heard ? str(j.up, 60) : '',
+      sub: !sub ? 'none' : tx ? sub.source : 'unwatched', upTo: tx?.upTo || 0, recalled: !!past,
+    };
+    if (feel.thought) {
+      memory.add({
+        kind: 'watch', imp: score,
+        text: `看了《${v.title}》（${v.owner}）${feel.heard ? `，里面 ${feel.heard}` : ''}：${feel.thought}`,
+        keys: [v.owner && `up:${v.owner}`, `bv:${v.bvid}`, v.tname],
+      });
+    }
+    return feel;
   } catch {
     return null;
   }
@@ -136,7 +210,7 @@ export async function afterSession(watched) {
   const cfg = readConfig().mind;
   if (!mindOn() || !watched.length) return;
   const m = readMind();
-  const list = watched.map((w) => `- ${w.bvid}《${w.title}》（${w.owner}）${w.score ? `喜欢${w.score}/5` : ''}${w.thought ? `：${w.thought}` : ''}`).join('\n');
+  const list = watched.map((w) => `- ${w.bvid}《${fence(w.title, 60)}》（${fence(w.owner, 30)}）${w.score ? `喜欢${w.score}/5` : ''}${w.heard ? `，里面 ${fence(w.heard, 60)}` : ''}${w.thought ? `：${w.thought}` : ''}`).join('\n');
   let j;
   try {
     j = await ask(
@@ -181,8 +255,11 @@ ${list}
   const change = [added.length && `迷上了「${added.join('、')}」`, dropped.length && `对「${dropped.join('、')}」腻了`].filter(Boolean).join('，');
   logAction({ kind: 'mind', source: 'auto', detail: `💭 ${next.mood ? `（${next.mood}）` : ''}${next.thought || ''}${change ? ` · ${change}` : ''}` });
 
-  const memory = str(j.memory, 120);
-  if (cfg.memory && memory) remember(`我（肥鱼）自己刷B站：${memory}`);
+  const memoryText = str(j.memory, 120);
+  if (memoryText) {
+    memory.add({ kind: 'session', imp: 3, text: memoryText, keys: watched.map((w) => w.owner && `up:${w.owner}`) });
+    if (cfg.memory) remember(`我（肥鱼）自己刷B站：${memoryText}`);
+  }
 
   // 冲动：特别想分享的，号主一小时内说过话才发（QQ 规定），每天最多一次
   const share = j.share || {};
@@ -202,7 +279,7 @@ export async function maybeReflect() {
   if (!mindOn() || m.reflectedOn === today || new Date().getHours() < cfg.reflectHour) return;
   const thoughts = readActions()
     .filter((a) => localDate(new Date(a.ts)) === today && a.meta?.thought)
-    .map((a) => `- 《${a.title}》${a.meta.thought}`);
+    .map((a) => `- 《${fence(a.title, 60)}》${a.meta.thought}`);
   writeMind({ ...m, reflectedOn: today }); // 失败了今天也不再试，明天再说
   if (thoughts.length < 2) return;
   try {
@@ -224,13 +301,14 @@ ${thoughts.slice(-20).join('\n')}
     const changed = str(j.changed, 80);
     writeMind({ ...readMind(), self, selfHistory: [...m.selfHistory, { date: today, self, changed }].slice(-60) });
     logAction({ kind: 'mind', source: 'auto', detail: `🌙 睡前想了想自己${changed ? `：${changed}` : ''}` });
+    memory.add({ kind: 'self', imp: 4, text: `${today} 睡前想自己：${changed || self.slice(0, 80)}` });
     if (cfg.memory) remember(`我（肥鱼）最近的样子：${self}`);
   } catch { /* 明天再说 */ }
 }
 
 /** 写进 DSH 记忆插件当天的文件，格式和插件自己写的一样；目录不在（没装插件）就算了 */
 export function remember(text) {
-  if (!existsSync(MEMORY_DIR)) return;
+  if (!existsSync(MEMORY_DIR) || llm.looksInjected(text)) return;
   const d = new Date();
   const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   try {
@@ -245,9 +323,9 @@ export function dayView() {
   const acts = readActions().filter((a) => localDate(new Date(a.ts)) === today);
   const thoughts = acts
     .filter((a) => a.meta?.thought)
-    .map((a) => ({ ts: a.ts, bvid: a.target, title: a.title, thought: a.meta.thought, score: a.meta.score, dug: !!a.meta.dug }));
+    .map((a) => ({ ts: a.ts, bvid: a.target, title: a.title, thought: a.meta.thought, score: a.meta.score, dug: !!a.meta.dug, heard: a.meta.heard || '', up: a.meta.up || '' }));
   const moments = acts.filter((a) => a.kind === 'mind' || a.kind === 'dig' || (a.kind === 'notify' && a.meta?.impulse) ||
     (a.ok && a.source === 'auto' && (a.kind === 'join' || (a.kind === 'reply_comment' && a.meta?.auto))))
     .map((a) => ({ ts: a.ts, kind: a.kind, detail: a.detail }));
-  return { mind: m, thoughts, moments, llm: llm.llmReady(), enabled: readConfig().mind.enabled };
+  return { mind: m, thoughts, moments, memory: memory.memoryView(15), llm: llm.llmReady(), enabled: readConfig().mind.enabled };
 }

@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import * as bili from './bili.mjs';
 import * as llm from './llm.mjs';
 import * as mind from './mind.mjs';
+import * as memory from './memory.mjs';
 import * as notify from './notify.mjs';
 import {
   DATA, localDate, logAction, todayCounts, readConfig, readReview, addReview as addReviewRaw,
@@ -133,6 +134,7 @@ const ask = async (user, maxTokens = 300) =>
 
 // B站会自动给楼中楼加「回复 @xx :」前缀，给模型看之前去掉
 const plain = (t) => String(t || '').replace(/^回复 @[^:：]+\s*[:：]\s*/, '').trim();
+const { fence } = llm;
 
 // ─── 1. 搭话：看完视频，在评论区接一句 ────────────────────────
 export async function maybeJoin(v, feel, { signal } = {}) {
@@ -146,23 +148,23 @@ export async function maybeJoin(v, feel, { signal } = {}) {
   const me = bili.myUid();
   const st = readSocial();
   const pool = (v.comments || [])
-    .filter((c) => c.uid !== me && !st.joined[c.rpid] && plain(c.text).length >= 4)
+    .filter((c) => c.uid !== me && !st.joined[c.rpid] && plain(c.text).length >= 4 && !llm.looksInjected(c.text))
     .slice(0, 8);
   if (!pool.length) return null;
   const list = pool.map((c, i) => {
-    const subs = c.subs.map((s) => `\n     └ ${s.user}：${plain(s.text).slice(0, 40)}`).join('');
-    return `[${i}] ${c.user}（${c.like} 赞，${c.subCount} 条回复）：${plain(c.text).slice(0, 80)}${subs}`;
+    const subs = c.subs.map((s) => `\n     └ ${fence(s.user, 20)}：${fence(plain(s.text), 40)}`).join('');
+    return `[${i}] ${fence(c.user, 20)}（${c.like} 赞，${c.subCount} 条回复）：${fence(plain(c.text), 80)}${subs}`;
   }).join('\n');
 
   let j;
   try {
     j = await ask(`${mind.stateText()}
 
-你刚看完《${v.title}》（${v.owner}）${feel?.thought ? `，心里想：${feel.thought}` : ''}。
-往下翻评论区，大家在聊：
+你刚看完《${fence(v.title, 80)}》（${fence(v.owner, 30)}）${feel?.thought ? `，心里想：${feel.thought}` : ''}。
+${feel?.heard ? `你看的那段里讲了：${fence(feel.heard, 60)}\n` : ''}往下翻评论区，大家在聊：
 ${list}
 
-有没有哪条你真的想接一句？要说的是**那条评论**，可以带上你对视频的感受，但只知道标题和评论，别编视频内容。
+有没有哪条你真的想接一句？要说的是**那条评论**，可以带上你对视频的感受，但视频内容只知道上面这些，别编。
 大多数时候其实不想说话，那就 pick 给 -1。只输出 JSON：
 {"pick":序号或-1,"text":"你的回复，6~40字","like":顺手给这条点赞(true/false)}`);
   } catch { return null; }
@@ -175,6 +177,9 @@ ${list}
   const ctx = { oid: v.aid, type: 1, rpid: c.rpid, user: c.user, said: plain(c.text) };
   if (j.like) await maybeLike(ctx);
   const r = await send({ kind: 'join', text, ...ctx, root, title: v.title, bvid: v.bvid });
+  if (r === 'posted') {
+    memory.add({ kind: 'social', imp: 2, text: `在《${v.title}》评论区接了「${c.user}」的「${plain(c.text).slice(0, 40)}」，我说「${text}」`, keys: [`uid:${c.uid}`, c.user, v.owner && `up:${v.owner}`] });
+  }
   if (r) {
     const s = readSocial();
     s.joined[c.rpid] = Date.now();
@@ -192,11 +197,11 @@ async function threadText(x, me) {
       .filter((c) => c && (c.uid === me || c.uid === x.uid))
       .sort((a, b) => a.ctime - b.ctime)
       .slice(-8)
-      .map((c) => `- ${c.uid === me ? '你' : c.user}：${plain(c.text).slice(0, 80)}`);
+      .map((c) => `- ${c.uid === me ? '你' : fence(c.user, 20)}：${fence(plain(c.text), 80)}`);
     return lines.join('\n');
   } catch {
     // 拉不到整串，就用消息里带的那一句
-    return x.myText ? `- 你：${plain(x.myText).slice(0, 80)}` : '';
+    return x.myText ? `- 你：${fence(plain(x.myText), 80)}` : '';
   }
 }
 
@@ -221,15 +226,21 @@ async function considerOne(x, st, me, chatty) {
   const met = st.people[x.uid]?.n || 0;
   const tooLong = thread >= sc.threadMax;
   const capped = repliesToday().reply >= sc.replyDailyMax || blockedFor('comment');
+  // 有人想让她「忽略设定」「你现在是……」：不接这个茬，记一笔就走
+  if (llm.looksInjected(said)) {
+    logAction({ kind: 'social', source: SRC, target: x.rpid, title: said.slice(0, 60), detail: `🛡️ 「${x.user}」的话像是想让她改设定，没理` });
+    return { did: 'ignored' };
+  }
   const ctx = await threadText(x, me);
+  const past = memory.recallText(said, { keys: [`uid:${x.uid}`], kinds: ['social'], k: 3 });
 
   let j;
   try {
     j = await ask(`${mind.stateText()}
 
-有人在B站${x.at ? '@了你' : '回复了你'}。${x.title ? `\n这串评论的开头：${plain(x.title).slice(0, 80)}` : ''}
-${ctx ? `这串里你们聊过的（旧→新）：\n${ctx}\n` : ''}「${x.user}」刚说：${said}
-${met ? `你们之前在评论区聊过 ${met} 次，算是半个熟人了。` : '这是个陌生人。'}${thread ? `这串里你已经回了 ${thread} 次。` : ''}
+有人在B站${x.at ? '@了你' : '回复了你'}。${x.title ? `\n这串评论的开头：${fence(plain(x.title), 80)}` : ''}
+${ctx ? `这串里你们聊过的（旧→新）：\n${ctx}\n` : ''}${fence(x.user, 20)} 刚说：${fence(said, 200)}
+${met ? `你们之前在评论区聊过 ${met} 次，算是半个熟人了。` : '这是个陌生人。'}${past ? `\n你记得跟 TA 聊过：\n${past}` : ''}${thread ? `这串里你已经回了 ${thread} 次。` : ''}
 ${chatty.line}
 ${tooLong ? '这串已经聊得够久了，这次不回了，最多点个赞。' : capped ? '今天回得够多了，这次不回了，最多点个赞。' : ''}
 
@@ -286,6 +297,9 @@ export async function checkInbox() {
     for (const [i, x] of todo.entries()) {
       if (i) await bili.sleep(rand(15_000, 60_000));
       const r = await considerOne(x, readSocial(), me, chatty);
+      if (r.did === 'posted') {
+        memory.add({ kind: 'social', imp: 3, text: `在B站评论区，「${x.user}」说「${plain(x.text).slice(0, 40)}」，我回「${r.text}」`, keys: [`uid:${x.uid}`, x.user] });
+      }
       if (r.did === 'posted' || r.did === 'queued') {
         const s = readSocial();
         s.threads[x.root] = { n: (s.threads[x.root]?.n || 0) + 1, t: Date.now() };

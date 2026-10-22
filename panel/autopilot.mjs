@@ -594,14 +594,19 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
       summary.watched++;
       summary.seconds += w.played;
       live.step = '想了想';
-      const feel = await mind.react(v, { played: w.played, skipped: plan.skipped });
-      watchedList.push({ bvid: v.bvid, title: v.title, owner: v.owner, thought: feel?.thought, score: feel?.score });
+      // 认真看了的读一下字幕，她才知道视频里到底讲了什么；拿不到就算了（风控照样往外抛）
+      const sub = !plan.skipped && cfg.mind.subtitles && mind.mindOn()
+        ? await bili.videoSubtitle(v.bvid, v.cid).catch((e) => { if (e.risk) throw e; return null; })
+        : null;
+      const feel = await mind.react(v, { played: w.played, skipped: plan.skipped, sub });
+      if (feel?.heard) v.heard = feel.heard;
+      watchedList.push({ bvid: v.bvid, title: v.title, owner: v.owner, thought: feel?.thought, score: feel?.score, heard: feel?.heard });
       logAction({
         kind: 'watch', source: SRC, target: v.bvid, title: v.title,
         detail: `${plan.skipped ? '划走了' : '看了'}《${v.title}》${fmtSec(w.played)} / ${fmtSec(v.duration)}`,
         meta: {
           played: w.played, duration: v.duration, owner: v.owner, vip: !!c.vip,
-          ...(feel ? { thought: feel.thought, score: feel.score, dug: !!c.dug } : {}),
+          ...(feel ? { thought: feel.thought, score: feel.score, dug: !!c.dug, heard: feel.heard, up: feel.up, sub: feel.sub } : {}),
         },
       });
       appendDiaryFragment({ type: 'watch', bvid: v.bvid, title: v.title });

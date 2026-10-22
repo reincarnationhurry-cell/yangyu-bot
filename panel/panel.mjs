@@ -78,6 +78,7 @@ function autopilotView() {
     lastRun: state.lastRun || null,
     cooldownUntil: state.cooldownUntil && state.cooldownUntil > Date.now() ? state.cooldownUntil : null,
     llmReady: llm.llmReady(),
+    llmUsage: llm.usageView(),
     hasKey: !!readSecrets().llmApiKey,
     coinLock: bili.coinLock(),
     social: social.socialView(),
@@ -405,7 +406,7 @@ const routes = {
   },
   'POST /api/ai/comment': async (_q, b) => {
     const video = await bili.browseVideo(b.bvid);
-    const text = await llm.draftComment(video);
+    const text = await llm.draftComment(video, { essential: true });
     if (!text) throw new Error('她觉得这个视频没什么想说的');
     return { text };
   },
@@ -432,9 +433,14 @@ const routes = {
   'GET /api/mind': async () => mind.dayView(),
   // 她的记忆流：记错了的可以删
   'POST /api/memory/delete': async (_q, b) => ({ ok: memory.remove(String(b.id || '')), ...memory.memoryView(15) }),
+  'POST /api/memory/update': async (_q, b) => {
+    if (!memory.update(String(b.id || ''), { text: b.text, imp: b.imp })) throw new Error('没改成：找不到这条，或者内容是空的 / 没过安全检查');
+    return memory.memoryView(15);
+  },
+  'POST /api/memory/tidy': async () => ({ result: await mind.tidyMemory(), ...memory.memoryView(15) }),
   'POST /api/social/check': async () => {
     if (!social.socialOn()) throw new Error('先打开「评论区社交」并配好模型');
-    const r = await social.checkInbox();
+    const r = await social.checkInbox({ essential: true });
     bust('unread', 'replyFeed');
     return { note: r.note, social: social.socialView() };
   },

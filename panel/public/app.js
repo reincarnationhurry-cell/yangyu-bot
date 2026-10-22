@@ -289,19 +289,36 @@ async function renderDay(el) {
     ${lines.length ? `<ul class="tl compact" style="margin-top:10px">${lines.map((l) => `<li ${l.bvid ? `data-bvid="${esc(l.bvid)}" style="cursor:pointer"` : ''}><div class="time num">${hm(l.ts)}</div><div class="ico">•</div><div class="body">${l.html}</div></li>`).join('')}</ul>` : '<div class="empty">今天还没有心里话</div>'}
     ${m.self ? `<details style="margin-top:10px"><summary class="small">最近的她${last?.changed ? ` · ${esc(last.date)}：${esc(last.changed)}` : ''}</summary><p class="small">${esc(m.self)}</p>
       ${m.selfHistory.length > 1 ? `<div class="small muted">${m.selfHistory.slice(-8, -1).reverse().map((h) => `${esc(h.date)}${h.changed ? '：' + esc(h.changed) : ''}`).join('<br>')}</div>` : ''}</details>` : ''}
-    <details style="margin-top:6px" id="memBox"><summary class="small">她的记忆（${d.memory?.total || 0} 条，最近的在上面；记错了就删）</summary><div id="memList"></div></details>`;
+    ${d.lingo?.length ? `<div class="small" style="margin-top:8px"><span class="k">学会的说法</span> ${d.lingo.map((w) => `<span class="chip" title="${esc(w.meaning)}${w.example ? '\n例：' + esc(w.example) : ''}\n${esc(w.at)} 学会，碰到过 ${w.n} 次">${esc(w.phrase)}</span>`).join(' ')}</div>` : ''}
+    <details style="margin-top:6px" id="memBox"><summary class="small">她的记忆（${d.memory?.total || 0} 条，最近的在上面；记错了能改能删）</summary><div id="memList"></div></details>`;
   renderMemories($('#memList', el), d.memory);
 }
 
-const MEM_KIND = { watch: '📺', session: '🐟', social: '💬', self: '🌙' };
+const MEM_KIND = { watch: '📺', session: '🐟', social: '💬', self: '🌙', gist: '🧩' };
 function renderMemories(box, mem) {
   if (!box) return;
   const list = mem?.recent || [];
   box.innerHTML = list.length
     ? `<ul class="vip-list">${list.map((e) => `<li><div style="flex:1;min-width:0" class="small">${MEM_KIND[e.kind] || '•'} ${esc(e.text)}
-        <div class="muted">${ago(e.ts)} · 重要 ${e.imp}/5${e.seen ? ' · 最近想起过' : ''}</div></div>
+        <div class="muted">${ago(e.ts)} · 重要 ${e.imp}/5${e.from ? ` · ${e.from} 条合成的` : ''}${e.n ? ` · 想起过 ${e.n} 次` : ''}${e.edited ? ' · 你改过' : ''}</div></div>
+        <button class="btn sm ghost" data-memedit="${esc(e.id)}" title="改这条">✎</button>
         <button class="btn sm ghost" data-memdel="${esc(e.id)}" title="删掉这条">✕</button></li>`).join('')}</ul>`
     : '<div class="empty">还什么都没记</div>';
+  box.insertAdjacentHTML('beforeend', `<div class="row" style="margin-top:6px"><button class="btn sm ghost" id="memTidy">现在整理一下</button><span class="small muted">每晚睡前反思完会自己整理：零碎的合成印象，太久没想起的忘掉</span></div>`);
+  $('#memTidy', box).onclick = (ev) => busy(ev.target, async () => {
+    const r = await api('/api/memory/tidy', {});
+    const x = r.result || {};
+    toast(x.merged || x.forgot ? `合并 ${x.merged || 0} 条成 ${x.into || 0} 条，忘掉 ${x.forgot || 0} 条` : '没什么要整理的');
+    renderMemories(box, r);
+  });
+  $$('[data-memedit]', box).forEach((b) => (b.onclick = () => {
+    const e = list.find((x) => x.id === b.dataset.memedit);
+    const text = prompt('改成什么？', e.text);
+    if (text === null) return;
+    const imp = prompt('重要程度 1~5（越重要记得越久）', String(e.imp));
+    if (imp === null) return;
+    busy(b, async () => { renderMemories(box, await api('/api/memory/update', { id: e.id, text, imp: Number(imp) })); toast('改好了'); });
+  }));
   $$('[data-memdel]', box).forEach((b) => (b.onclick = () => busy(b, async () => {
     renderMemories(box, await api('/api/memory/delete', { id: b.dataset.memdel }));
   })));
@@ -335,6 +352,17 @@ function oneTimeTips(x) {
   if (!x.identify) tips.push('实名认证 +50');
   if (!tips.length) return '';
   return `<div class="hint" style="margin-top:12px">💡 一次性经验还没领：${tips.join('、')}。这些得你自己去 B站「账号设置」里弄，脚本不碰。</div>`;
+}
+
+// 今天模型用了多少：后台的跟预算比，你点的单独算
+function usageLine(u) {
+  if (!u) return '';
+  const k = (n) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+  const lim = (used, max) => (max > 0 ? `${k(used)} / ${k(max)}` : `${k(used)}（不限）`);
+  const NAME = { mind: '内心', social: '评论区社交', comment: '评论', memory: '整理记忆', reply: '回复', diary: '日记', task: '派活', test: '测试', other: '其他' };
+  const tags = Object.entries(u.byTag || {}).sort((a, b) => b[1].tokens - a[1].tokens)
+    .map(([t, x]) => `${NAME[t] || t} ${x.calls} 次`).join(' · ');
+  return `<div class="hint" style="margin-top:8px">今天：后台 ${lim(u.bg.calls, u.limit.calls)} 次、${lim(u.bg.tokens, u.limit.tokens)} tokens；一共 ${u.calls} 次 ${k(u.tokens)} tokens${u.hitAt ? ` · <b>${hm(u.hitAt)} 用完了</b>` : ''}${tags ? `<br>${tags}` : ''}</div>`;
 }
 
 function slotClass(s) { return s ? s.status : ''; }
@@ -633,6 +661,11 @@ async function pageAutopilot(main) {
           <div><label class="f">API Key</label><input type="password" id="llmKey" placeholder="${ap.hasKey ? '已保存（留空不改）' : 'sk-…'}" autocomplete="off"></div>
         </div>
         <div class="row" style="margin-top:10px"><button class="btn sm" id="llmModels">列出可用模型</button><button class="btn sm" id="llmTest">测试连通</button><span class="small muted" id="llmMsg"></span></div>
+        <div class="cfg-grid" style="margin-top:10px">
+          ${num('llm.dailyCalls', '后台每天最多调几次', { max: 5000, hint: '内心、评论区社交、自动评论算在里面；0 = 不限' })}
+          ${num('llm.dailyTokens', '后台每天最多用多少 tokens', { max: 50000000, step: 10000, hint: '到了就按老习惯随缘刷，第二天恢复' })}
+        </div>
+        ${usageLine(ap.llmUsage)}
       </div>
       <div class="cfg-sec">
         <h3>📮 QQ 提醒 <span id="ntState"></span></h3>

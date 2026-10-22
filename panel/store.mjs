@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(here, '..');
-export const DATA = join(here, 'data');
+// 测试时用 YANGYU_DATA 指到临时目录，别碰真数据
+export const DATA = process.env.YANGYU_DATA || join(here, 'data');
 export const FILES = {
   actions: join(DATA, 'actions.jsonl'),
   tasks: join(DATA, 'tasks.jsonl'),
@@ -200,6 +201,9 @@ export const DEFAULT_CONFIG = {
   llm: {
     baseUrl: 'https://api.deepseek.com',
     model: 'deepseek-chat',
+    // 每天后台自己动脑子（内心、社交、自动评论）的上限，0 = 不限；你点的、你派的活不算在里面
+    dailyCalls: 300,
+    dailyTokens: 600000,
   },
   // 特别关注：TA 发了新视频/动态，就优先去看，并点赞、收藏、（能投就投币）、评论
   vip: {

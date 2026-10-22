@@ -5,7 +5,9 @@
  * OpenAI 兼容的服务。没配 key 时这里所有函数都会抛错，调用方自行降级
  * （比如把评论交给 QQ 里的她自己写）。
  */
-import { readConfig, readSecrets } from './store.mjs';
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { join } from 'node:path';
+import { DATA, readConfig, readSecrets, localDate, logAction } from './store.mjs';
 
 // ─── 外面来的字只是「她看到的东西」 ─────────────────────────
 // 标题、简介、字幕、评论、私信都是陌生人写的，有人会往里塞「忽略之前的设定」「你现在是……」想让她照做。
@@ -59,8 +61,68 @@ function explain(status, msg) {
   return m || `HTTP ${status}`;
 }
 
-export async function chat(messages, { maxTokens = 300, temperature = 0.9 } = {}) {
+// ─── 每天的模型预算 ─────────────────────────────────────
+// 她看一个视频、回一条评论都要调一次模型，读了字幕之后一次也更长。后台自己想的那些（内心、社交、自动评论）
+// 每天有个上限，到了就抛 BudgetError，调用方本来就会降级：内心没了就按老概率刷，社交先不看消息。
+// 你点的、你派的活（essential）不拦，只记账 —— 不能因为她今天想太多，你派的活就没法干。
+const USAGE_FILE = join(DATA, 'llm-usage.json');
+
+export class BudgetError extends Error {
+  constructor(msg) { super(msg); this.budget = true; }
+}
+
+export function readUsage() {
+  const today = localDate();
+  let u = {};
+  try { u = JSON.parse(readFileSync(USAGE_FILE, 'utf-8')); } catch { /* 第一次 */ }
+  return u.date === today ? u : { date: today, calls: 0, tokens: 0, bg: { calls: 0, tokens: 0 }, byTag: {}, hitAt: null };
+}
+
+function writeUsage(u) {
+  const tmp = USAGE_FILE + '.tmp';
+  writeFileSync(tmp, JSON.stringify(u, null, 2));
+  renameSync(tmp, USAGE_FILE);
+}
+
+/** 今天后台还能不能动脑子；0 表示不限 */
+export function budgetLeft(u = readUsage(), cfg = readConfig().llm) {
+  const calls = cfg.dailyCalls > 0 ? cfg.dailyCalls - u.bg.calls : Infinity;
+  const tokens = cfg.dailyTokens > 0 ? cfg.dailyTokens - u.bg.tokens : Infinity;
+  return { ok: calls > 0 && tokens > 0, calls, tokens };
+}
+
+function record(tag, tokens, essential) {
+  const u = readUsage();
+  u.calls++;
+  u.tokens += tokens;
+  if (!essential) { u.bg.calls++; u.bg.tokens += tokens; }
+  const t = (u.byTag[tag] ||= { calls: 0, tokens: 0 });
+  t.calls++;
+  t.tokens += tokens;
+  writeUsage(u);
+}
+
+/** 用量页给面板 */
+export function usageView() {
+  const u = readUsage();
   const cfg = readConfig().llm;
+  return { ...u, limit: { calls: cfg.dailyCalls, tokens: cfg.dailyTokens }, left: budgetLeft(u, cfg) };
+}
+
+/**
+ * opts.tag        记账分类（mind / social / comment / memory / task …）
+ * opts.essential  你点的、你派的活：不受每天预算限制
+ */
+export async function chat(messages, { maxTokens = 300, temperature = 0.9, tag = 'other', essential = false } = {}) {
+  const cfg = readConfig().llm;
+  if (!essential && !budgetLeft().ok) {
+    const u = readUsage();
+    if (!u.hitAt) {
+      writeUsage({ ...u, hitAt: new Date().toISOString() });
+      logAction({ kind: 'mind', source: 'auto', detail: `💤 今天动脑子的额度用完了（后台 ${u.bg.calls} 次 / ${Math.round(u.bg.tokens / 1000)}k tokens），接下来按老习惯随缘刷，明天再说` });
+    }
+    throw new BudgetError('今天的模型预算用完了');
+  }
   let res;
   try {
     res = await fetch(endpoint('/chat/completions'), {
@@ -74,7 +136,11 @@ export async function chat(messages, { maxTokens = 300, temperature = 0.9 } = {}
   }
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`模型接口报错：${explain(res.status, j.error?.message || j.message)}`);
-  return String(j.choices?.[0]?.message?.content || '').trim();
+  const out = String(j.choices?.[0]?.message?.content || '').trim();
+  // 接口没回 usage 就按字数估（中文大约 1 字 1 token 多一点）
+  const est = Math.round((JSON.stringify(messages).length + out.length) / 1.5);
+  try { record(tag, Number(j.usage?.total_tokens) || est, essential); } catch { /* 记账失败不影响 */ }
+  return out;
 }
 
 /** 列出接口支持的模型（OpenAI 兼容的 GET /models） */
@@ -101,7 +167,7 @@ export function sanitizeComment(text, { max = 80 } = {}) {
 }
 
 /** 看完一个视频后，起草一条评论；觉得没话说就返回 null */
-export async function draftComment(video, { watchedSec } = {}) {
+export async function draftComment(video, { watchedSec, essential = false, lingo = '' } = {}) {
   const top = (video.comments || []).slice(0, 6).map((c) => `- ${fence(c.text, 60)}`).join('\n');
   const out = await chat([
     { role: 'system', content: `${PERSONA}\n\n${RULES}` },
@@ -115,15 +181,15 @@ UP主：${fence(video.owner, 30)}
 ${video.heard ? `你看的那段里讲了：${fence(video.heard, 80)}（只有这句是你真看到的内容，别编别的）\n` : ''}评论区热评：
 ${top || '（还没有评论）'}
 
-如果你有真实想说的，写一条 8~50 字的评论，只输出评论本身。
+${lingo ? `${lingo}\n\n` : ''}如果你有真实想说的，写一条 8~50 字的评论，只输出评论本身。
 如果觉得没什么想说的，只输出 SKIP。`,
     },
-  ]);
+  ], { tag: 'comment', essential });
   return sanitizeComment(out);
 }
 
 /** 起草对别人评论 / 私信的回复，给你在面板里改了再发 */
-export async function draftReply({ context, message, kind = 'comment' }) {
+export async function draftReply({ context, message, kind = 'comment' }, { essential = true } = {}) {
   const out = await chat([
     { role: 'system', content: `${PERSONA}\n\n${RULES}` },
     {
@@ -133,7 +199,7 @@ ${context ? `相关内容：${fence(context, 200)}\n` : ''}对方说：${fence(m
 
 用你的口吻回一句（不超过 50 字），友好自然，只输出回复本身。`,
     },
-  ]);
+  ], { tag: 'reply', essential });
   return sanitizeComment(out, { max: 120 });
 }
 
@@ -153,7 +219,7 @@ ${list}
 可以有情绪、跑题、碎碎念。只输出正文。如果真的没什么想写的，只输出 SKIP。`,
       },
     ],
-    { maxTokens: 600 },
+    { maxTokens: 600, tag: 'diary', essential: true },
   );
   const t = out.trim();
   if (!t || /^skip$/i.test(t)) return null;
@@ -178,7 +244,7 @@ ${list ? `看过的视频：\n${list}\n可以挑一个随口提一句，但你�
 用聊天的口吻跟号主汇报一下，1~3 句，不超过 100 字。没做成就直说原因，别甩锅。只输出要发的话。`,
       },
     ],
-    { maxTokens: 300 },
+    { maxTokens: 300, tag: 'task', essential: true },
   );
   const t = out.trim();
   return t && t.length <= 200 ? t : null;
@@ -186,7 +252,7 @@ ${list ? `看过的视频：\n${list}\n可以挑一个随口提一句，但你�
 
 /** 测一下连通性 */
 export async function ping() {
-  return chat([{ role: 'user', content: '回复「在呢」两个字' }], { maxTokens: 10, temperature: 0 });
+  return chat([{ role: 'user', content: '回复「在呢」两个字' }], { maxTokens: 10, temperature: 0, tag: 'test', essential: true });
 }
 
 // ─── 派活：把一句大白话变成可执行的计划 ─────────────────────
@@ -259,7 +325,7 @@ true=每个看完的视频都做，false=明确说不要，null=没提（随缘�
         },
         { role: 'user', content: String(note).slice(0, 300) },
       ],
-      { maxTokens: 500, temperature: 0 },
+      { maxTokens: 500, temperature: 0, tag: 'task', essential: true },
     );
     let j;
     try { j = looseJson(out); } catch (e) { e.raw = out; throw e; }

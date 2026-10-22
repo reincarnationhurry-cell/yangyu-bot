@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
 import * as memory from './memory.mjs';
+import * as lingo from './lingo.mjs';
 import { ROOT, DATA, localDate, logAction, readConfig, readActions, nowIso } from './store.mjs';
 
 const FILE = join(DATA, 'mind.json');
@@ -72,8 +73,8 @@ export function stateText(m = readMind()) {
 
 const { fence } = llm;
 
-const ask = async (system, user, maxTokens = 500) =>
-  llm.looseJson(await llm.chat([{ role: 'system', content: `${llm.PERSONA}\n${system}` }, { role: 'user', content: user }], { maxTokens }));
+const ask = async (system, user, maxTokens = 500, opts = {}) =>
+  llm.looseJson(await llm.chat([{ role: 'system', content: `${llm.PERSONA}\n${system}` }, { role: 'user', content: user }], { maxTokens, tag: 'mind', ...opts }));
 
 // 模型有时把「没有」「无」「照抄」这类占位话当成值填进来，当空的处理
 const str = (v, max) => {
@@ -277,10 +278,25 @@ export async function maybeReflect() {
   const today = localDate();
   const m = readMind();
   if (!mindOn() || m.reflectedOn === today || new Date().getHours() < cfg.reflectHour) return;
+  writeMind({ ...m, reflectedOn: today }); // 失败了今天也不再试，明天再说
+  await reflect(m, today, cfg);
+  await tidyMemory();
+  await learnLingo(cfg);
+}
+
+/** 睡前翻翻今天见过的热评，学几个新说法 */
+async function learnLingo(cfg) {
+  try {
+    const r = await lingo.learn({ remember: cfg.memory ? remember : null });
+    if (r?.fresh.length) logAction({ kind: 'mind', source: 'auto', detail: `📚 在评论区学会了 ${r.fresh.map((w) => `「${w.phrase}」（${w.meaning}）`).join('、')}` });
+  } catch { /* 明天再学 */ }
+}
+
+// 睡前反思是一天一次的正事，不受后台预算限制（essential）
+async function reflect(m, today, cfg) {
   const thoughts = readActions()
     .filter((a) => localDate(new Date(a.ts)) === today && a.meta?.thought)
     .map((a) => `- 《${fence(a.title, 60)}》${a.meta.thought}`);
-  writeMind({ ...m, reflectedOn: today }); // 失败了今天也不再试，明天再说
   if (thoughts.length < 2) return;
   try {
     const j = await ask(
@@ -295,6 +311,7 @@ ${thoughts.slice(-20).join('\n')}
 大部分照旧，只改今天真的让你有变化的地方。输出：
 {"self":"最近的我，150字内","changed":"一句话：今天让你有点不一样的是什么（没变化就空字符串）"}`,
       600,
+      { essential: true },
     );
     const self = str(j.self, 300);
     if (!self) return;
@@ -304,6 +321,18 @@ ${thoughts.slice(-20).join('\n')}
     memory.add({ kind: 'self', imp: 4, text: `${today} 睡前想自己：${changed || self.slice(0, 80)}` });
     if (cfg.memory) remember(`我（肥鱼）最近的样子：${self}`);
   } catch { /* 明天再说 */ }
+}
+
+/** 反思完顺便整理记忆：零碎的合成印象，过了寿命的忘掉 */
+export async function tidyMemory() {
+  try {
+    const r = await memory.tidy();
+    if (r.merged || r.forgot) {
+      const parts = [r.merged && `把 ${r.merged} 条零碎的合成了 ${r.into} 条印象`, r.forgot && `忘掉了 ${r.forgot} 条`].filter(Boolean);
+      logAction({ kind: 'mind', source: 'auto', detail: `🧹 整理了一下记忆：${parts.join('，')}（现在记得 ${r.total} 条）`, meta: { gists: r.gists } });
+    }
+    return r;
+  } catch { return null; }
 }
 
 /** 写进 DSH 记忆插件当天的文件，格式和插件自己写的一样；目录不在（没装插件）就算了 */
@@ -327,5 +356,5 @@ export function dayView() {
   const moments = acts.filter((a) => a.kind === 'mind' || a.kind === 'dig' || (a.kind === 'notify' && a.meta?.impulse) ||
     (a.ok && a.source === 'auto' && (a.kind === 'join' || (a.kind === 'reply_comment' && a.meta?.auto))))
     .map((a) => ({ ts: a.ts, kind: a.kind, detail: a.detail }));
-  return { mind: m, thoughts, moments, memory: memory.memoryView(15), llm: llm.llmReady(), enabled: readConfig().mind.enabled };
+  return { mind: m, thoughts, moments, memory: memory.memoryView(15), lingo: lingo.readLingo().words, llm: llm.llmReady(), enabled: readConfig().mind.enabled };
 }

@@ -19,6 +19,7 @@ import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
 import * as mind from './mind.mjs';
 import * as social from './social.mjs';
+import * as lingo from './lingo.mjs';
 import {
   ROOT, SHICHEN, localDate, logAction, todayCounts, addTask, addReview as addReviewRaw, readReview, updateReview,
   readConfig, readState, writeState, readActions, readJsonl, appendJsonl, FILES, nowIso, readTasks,
@@ -600,6 +601,7 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
         : null;
       const feel = await mind.react(v, { played: w.played, skipped: plan.skipped, sub });
       if (feel?.heard) v.heard = feel.heard;
+      if (!plan.skipped) lingo.collect(v); // 热评里的说法攒着，晚上学
       watchedList.push({ bvid: v.bvid, title: v.title, owner: v.owner, thought: feel?.thought, score: feel?.score, heard: feel?.heard });
       logAction({
         kind: 'watch', source: SRC, target: v.bvid, title: v.title,
@@ -787,8 +789,9 @@ async function maybeComment(cfg, v, played, { vipName = null } = {}) {
   live.step = '想想说点什么';
   let text;
   try {
-    text = await llm.draftComment(v, { watchedSec: played });
+    text = await llm.draftComment(v, { watchedSec: played, lingo: lingo.lingoText() });
   } catch (e) {
+    if (e.budget) return null; // 今天预算用完了，安静地不评论
     logAction({ kind: 'error', source: SRC, ok: false, error: e.message, detail: 'AI 起草评论失败' });
     return null;
   }
@@ -910,7 +913,7 @@ async function diaryNow() {
 /** 看新回复 / @ → AI 起草回复进待审；私信只报数，不替你回 */
 async function inboxNow() {
   // 开了「回复别人」：她自己看、自己决定回不回
-  if (social.socialOn() && readConfig().social.reply) return (await social.checkInbox()).note;
+  if (social.socialOn() && readConfig().social.reply) return (await social.checkInbox({ essential: true })).note;
   const [replies, ats, unread] = await Promise.all([
     bili.replyFeed().catch(() => []),
     bili.atFeed().catch(() => []),

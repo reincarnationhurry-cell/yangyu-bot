@@ -19,6 +19,7 @@ import * as bili from './bili.mjs';
 import * as llm from './llm.mjs';
 import * as mind from './mind.mjs';
 import * as memory from './memory.mjs';
+import * as lingo from './lingo.mjs';
 import * as notify from './notify.mjs';
 import {
   DATA, localDate, logAction, todayCounts, readConfig, readReview, addReview as addReviewRaw,
@@ -60,7 +61,7 @@ function isQuiet(cfg, now = Date.now()) {
 
 /** 到点该看一眼消息了吗（autopilot 的 tick 来问） */
 export function inboxDue(cfg = readConfig()) {
-  return socialOn(cfg) && cfg.social.reply && !busy && !isQuiet(cfg) && Date.now() >= (readSocial().nextCheck || 0);
+  return socialOn(cfg) && cfg.social.reply && !busy && !isQuiet(cfg) && Date.now() >= (readSocial().nextCheck || 0) && llm.budgetLeft().ok;
 }
 
 /** 刷完一轮：几分钟后顺手看一眼消息 */
@@ -125,12 +126,13 @@ async function maybeLike({ oid, type, rpid, user, said }) {
   }
 }
 
-const ask = async (user, maxTokens = 300) =>
+const ask = async (user, maxTokens = 300, essential = false) =>
   llm.looseJson(await llm.chat([
     { role: 'system', content: `${llm.PERSONA}\n\n${llm.RULES}\n- 回别人的评论时，像网友之间接话：可以附和、接梗、补充、轻轻抬杠，别说教，别尬夸，别客服腔。
-- 你的心情只是背景，回的话要接**对方说的东西**，别句句扯到自己困了、饿了、心情怎样。` },
+- 你的心情只是背景，回的话要接**对方说的东西**，别句句扯到自己困了、饿了、心情怎样。
+${lingo.lingoText()}` },
     { role: 'user', content: user },
-  ], { maxTokens }));
+  ], { maxTokens, tag: 'social', essential }));
 
 // B站会自动给楼中楼加「回复 @xx :」前缀，给模型看之前去掉
 const plain = (t) => String(t || '').replace(/^回复 @[^:：]+\s*[:：]\s*/, '').trim();
@@ -218,7 +220,7 @@ function pickChatty() {
   return CHATTY[1];
 }
 
-async function considerOne(x, st, me, chatty) {
+async function considerOne(x, st, me, chatty, essential) {
   const cfg = readConfig();
   const sc = cfg.social;
   const said = plain(x.text);
@@ -246,7 +248,7 @@ ${tooLong ? '这串已经聊得够久了，这次不回了，最多点个赞。'
 
 你可以回，也可以不回 —— 真人也不是条条都回：光发表情、「哈哈」、只喊了你名字、没什么可接的、阴阳怪气、引战、打广告的，都可以不理；
 夸你、逗你、问你问题的，多半想回一句。也可以只点个赞表示看到了。只输出 JSON：
-{"why":"心里怎么想的，20字内","want":想回的程度1到5(1=完全不想理,3=可回可不回,5=非回不可),"text":"如果回，要说的话，4~40字","like":想不想点个赞(true/false)}`);
+{"why":"心里怎么想的，20字内","want":想回的程度1到5(1=完全不想理,3=可回可不回,5=非回不可),"text":"如果回，要说的话，4~40字","like":想不想点个赞(true/false)}`, 300, essential);
   } catch { return { did: null }; }
 
   const why = String(j?.why || '').trim().slice(0, 40);
@@ -264,11 +266,15 @@ ${tooLong ? '这串已经聊得够久了，这次不回了，最多点个赞。'
   return { did: r, text, why };
 }
 
-/** 看一眼「回复我的」和「@我」。时间到没到、是不是深夜由 inboxDue 管，派活和面板按钮直接叫 */
-export async function checkInbox() {
+/**
+ * 看一眼「回复我的」和「@我」。时间到没到、是不是深夜由 inboxDue 管，派活和面板按钮直接叫。
+ * essential：你点的 / 派的，不受每天模型预算限制；后台自己看的，预算用完就先不看（不然消息标成看过却没想，就漏了）
+ */
+export async function checkInbox({ essential = false } = {}) {
   const cfg = readConfig();
   if (!socialOn(cfg)) return { note: '没开「回复别人」或者没配模型' };
   if (busy) return { note: '正在看消息呢' };
+  if (!essential && !llm.budgetLeft().ok) return { note: '今天动脑子的额度用完了，消息明天再看' };
   busy = true;
   try {
     const now = Date.now();
@@ -296,7 +302,7 @@ export async function checkInbox() {
     const chatty = pickChatty();
     for (const [i, x] of todo.entries()) {
       if (i) await bili.sleep(rand(15_000, 60_000));
-      const r = await considerOne(x, readSocial(), me, chatty);
+      const r = await considerOne(x, readSocial(), me, chatty, essential);
       if (r.did === 'posted') {
         memory.add({ kind: 'social', imp: 3, text: `在B站评论区，「${x.user}」说「${plain(x.text).slice(0, 40)}」，我回「${r.text}」`, keys: [`uid:${x.uid}`, x.user] });
       }

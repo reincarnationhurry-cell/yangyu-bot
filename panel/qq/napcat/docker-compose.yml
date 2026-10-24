@@ -1,0 +1,25 @@
+# NapCat（Docker 版）：容器里跑 Linux 版 QQ，小号在这里登录，面板通过 ws://127.0.0.1:3001 连它。
+# Mac 版 QQ 里直接注入 NapCat 会被 macOS 以「代码签名无效」杀掉（2026-10-24 实测），维护者也建议用 Docker。
+#
+#   cd panel/qq/napcat
+#   docker compose up -d          启动（第一次会拉镜像）
+#   docker compose logs -f        看日志
+#   docker compose pull && docker compose up -d    更新
+#
+# WebUI：http://127.0.0.1:6099/webui ，登录密钥是同目录 .env 里的 WEBUI_TOKEN（不进 git）。
+# 端口只绑本机，别改成 0.0.0.0。
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: napcat
+    restart: unless-stopped
+    environment:
+      MODE: ws # 开一个正向 WebSocket（3001），面板连这个
+      WEBUI_TOKEN: ${WEBUI_TOKEN}
+    ports:
+      - "127.0.0.1:6099:6099"
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - ./data/qq:/app/.config/QQ # 小号的登录态，删了就要重新扫码
+      - ./data/config:/app/napcat/config
+      - ./data/plugins:/app/napcat/plugins

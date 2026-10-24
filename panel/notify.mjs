@@ -16,6 +16,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readConfig, readSecrets, localDate, nowIso, logAction, DATA, readPause } from './store.mjs';
 import * as llm from './llm.mjs';
+import * as qq from './qq/index.mjs';
 
 const DSH_CHANNELS = join(homedir(), '.dsh', 'dsh-im-connect', 'channels.json');
 const STATE = join(DATA, 'notify.json');
@@ -85,8 +86,12 @@ export function lastOwnerMessage() {
 
 export class NotInWindow extends Error {}
 
+// QQ 小号（qq/index.mjs）能主动发：不用借你的消息 id、没有一小时窗口
+const direct = () => qq.directOn();
+
 /** 直接发一条（不看开关和上限），给「测试」按钮和 notifyReview 用 */
-async function rawSend(text) {
+async function rawSend(text, kind = 'notice') {
+  if (direct()) return qq.sendOwner(text, kind);
   const { appId, secret, openId, from } = credentials();
   if (!appId || !secret || !openId) {
     throw new Error(`QQ 机器人凭证不全（${from}）：还缺 ${[!appId && 'AppID', !secret && 'AppSecret', !openId && 'openid'].filter(Boolean).join('、')}`);
@@ -123,7 +128,10 @@ export function status() {
   const st = readState();
   let ready = false;
   let why = '';
-  try {
+  if (direct()) {
+    ready = qq.connected();
+    why = ready ? '' : 'QQ 小号没连上（看看 QQ 和 NapCat 开着没）';
+  } else try {
     const c = credentials();
     ready = !!(c.appId && c.secret && c.openId);
     if (!ready) {
@@ -136,7 +144,8 @@ export function status() {
     config: cfg, ready, why,
     sentToday: st.sent?.[localDate()] || 0,
     pending: (st.pending || []).length,
-    windowOpen: !!last?.fresh,
+    direct: direct(),
+    windowOpen: direct() || !!last?.fresh,
     windowUntil: last ? last.at + PASSIVE_WINDOW : null,
     log: (st.log || []).slice(-8).reverse(),
   };
@@ -202,7 +211,7 @@ export async function reportTask(task, { ok, note, watched = [] }) {
   }
   if (!text) text = composeTaskReport(task, { ok, note, watched });
   try {
-    await rawSend(text);
+    await rawSend(text, 'report');
     const st = readState();
     st.log = [...(st.log || []), { ts: nowIso(), ok: true, task: task.id, text: text.slice(0, 60) }].slice(-30);
     writeState(st);
@@ -239,9 +248,9 @@ export async function impulse(text) {
   };
   if (quiet(cfg)) return hold('quiet');
   if (readPause()) return hold('paused');
-  if (!lastOwnerMessage()?.fresh) return hold('window');
+  if (!direct() && !lastOwnerMessage()?.fresh) return hold('window');
   try {
-    await rawSend(text);
+    await rawSend(text, 'proactive');
     const st = readState();
     st.log = [...(st.log || []), { ts: nowIso(), ok: true, impulse: true, text: text.slice(0, 60) }].slice(-30);
     writeState(st);
@@ -278,9 +287,9 @@ export function wasReminded(id) {
 export async function flushPending(readReview) {
   const st = readState();
   if (!st.pending?.length) return;
-  const last = lastOwnerMessage();
+  // 小号能主动发：排着的直接补（叫停、免打扰下面各自再看）；官方机器人只能等你「排队之后」又说了话 —— 那是新的回复窗口
+  const last = direct() ? { at: Infinity, fresh: true } : lastOwnerMessage();
   if (!last?.fresh) return;
-  // 只在你「排队之后」又说了话才补发 —— 那是新的回复窗口
   const ready = st.pending.filter((p) => last.at > p.ts);
   if (!ready.length) return;
 

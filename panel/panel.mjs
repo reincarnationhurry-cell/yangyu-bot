@@ -22,6 +22,8 @@ import * as memory from './memory.mjs';
 import * as social from './social.mjs';
 import * as sky from './sky.mjs';
 import * as health from './health.mjs';
+import * as qq from './qq/index.mjs';
+import * as owner from './qq/owner.mjs';
 import { openAsHer } from './browser.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
@@ -219,8 +221,9 @@ const routes = {
   // 自动养号
   'GET /api/autopilot': async () => autopilotView(),
   'POST /api/autopilot/config': async (_q, b) => {
-    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, ...patch } = b;
+    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, onebotToken, ...patch } = b;
     if (typeof llmApiKey === 'string') writeSecrets({ llmApiKey: llmApiKey.trim() });
+    if (typeof onebotToken === 'string' && onebotToken.trim()) writeSecrets({ onebotToken: onebotToken.trim() });
     // QQ 提醒的凭证：只存本机 secrets.json，留空表示不改
     for (const [k, v] of Object.entries({ qqAppId, qqAppSecret, qqOpenId })) {
       if (typeof v === 'string' && v.trim()) writeSecrets({ [k]: v.trim() });
@@ -236,6 +239,12 @@ const routes = {
     const cfg = writeConfig(patch);
     if (JSON.stringify(before.windows) !== JSON.stringify(cfg.windows) || before.windowChance !== cfg.windowChance) auto.replanToday();
     if (before.enabled !== cfg.enabled) logAction({ kind: 'autopilot', detail: cfg.enabled ? '打开了自动养号' : '关掉了自动养号' });
+    // QQ 连接的设置变了（或者换了 token）就重连
+    const qqKeys = (c) => JSON.stringify([c.qq.mode, c.qq.wsUrl, c.qq.ownerQQ]);
+    if (qqKeys(before) !== qqKeys(cfg) || onebotToken) {
+      qq.start();
+      if (before.qq.mode !== cfg.qq.mode) logAction({ kind: 'qq', detail: cfg.qq.mode === 'onebot' ? 'QQ 换成了她自己的小号' : 'QQ 换回了官方机器人（DSH 插件）' });
+    }
     return autopilotView();
   },
   'POST /api/autopilot/replan': async () => { auto.replanToday(); return autopilotView(); },
@@ -462,6 +471,13 @@ const routes = {
   'POST /api/notify/test': async () => ({ ok: true, ...(await notify.sendOwner('🐟 测试一下：以后有要你审的东西，我会在这里叫你～')) }),
   'GET /api/notify': async () => notify.status(),
 
+  // QQ 小号
+  'GET /api/qq': async () => qq.status(),
+  'POST /api/qq/test': async () => qq.test(),
+  'POST /api/qq/import-dsh': async () => ({ ...(await owner.importDsh()), ...qq.status() }),
+  'POST /api/qq/fact/delete': async (_q, b) => { owner.removeFact(String(b.id || '')); return qq.status(); },
+  'POST /api/qq/fact/update': async (_q, b) => { owner.updateFact(String(b.id || ''), String(b.text || '')); return qq.status(); },
+
   // 日记
   'GET /api/diary': async () => {
     const all = readJsonl(FILES.diary);
@@ -502,6 +518,7 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`\n🐟 养鱼面板已启动：http://${HOST}:${PORT}\n`);
   auto.startScheduler();
+  qq.start(); // 用小号时连 NapCat；用官方机器人时什么都不做
   // QQ 接入体检：DSH 自动升级后插件跟不上会静悄悄掉线，5 分钟看一眼
   setTimeout(() => health.check(), 60_000);
   setInterval(() => health.check(), 5 * 60_000);

@@ -110,7 +110,7 @@ const KIND = {
   comment: ['💬', '评论'], reply_comment: ['↩️', '回复评论'], dm_send: ['✉️', '私信'], search: ['🔍', '搜索'],
   feed: ['🏠', '刷推荐'], hot: ['🔥', '看热门'], task: ['📋', '派任务'], task_done: ['✅', '完成任务'],
   session_start: ['🐟', '开始刷'], session_end: ['🏁', '刷完了'], draft: ['📝', '起草'], diary: ['📔', '发日记'],
-  cooldown: ['🧊', '风控冷却'], pause: ['⏸', '号主叫停'], health: ['🩺', 'QQ 接入'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
+  cooldown: ['🧊', '风控冷却'], pause: ['⏸', '号主叫停'], health: ['🩺', 'QQ 接入'], qq: ['💬', 'QQ 小号'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
   login: ['🔑', '登录'], notify: ['📮', 'QQ 提醒'], favorite: ['⭐', '收藏'], vip_new: ['🌟', '特别关注更新'], dyn_like: ['👍', '动态点赞'], vip: ['🌟', '特别关注'], follow: ['➕', '关注'],
   mind: ['💭', '心里想'], dig: ['🕳️', '顺藤摸瓜'],
   join: ['🗨️', '评论区搭话'], social: ['📬', '看回复'], reply_like: ['👍', '评论点赞'],
@@ -296,7 +296,7 @@ async function renderDay(el) {
   renderMemories($('#memList', el), d.memory);
 }
 
-const MEM_KIND = { watch: '📺', session: '🐟', social: '💬', self: '🌙', gist: '🧩' };
+const MEM_KIND = { watch: '📺', session: '🐟', social: '💬', self: '🌙', gist: '🧩', chat: '🗨️' };
 function renderMemories(box, mem) {
   if (!box) return;
   const list = mem?.recent || [];
@@ -681,6 +681,24 @@ async function pageAutopilot(main) {
         ${usageLine(ap.llmUsage)}
       </div>
       <div class="cfg-sec">
+        <h3>💬 QQ 连接 <span id="qqState"></span></h3>
+        <p><b>官方机器人</b>：DSH + dsh-im-connect 插件，安全但限制多（只能在你说话后一小时内回，DSH 升级插件跟不上就掉线）。
+        <b>她自己的小号</b>：Docker 里跑 NapCat（容器里的 QQ 登小号），面板自己当大脑，能主动找你、发真的语音，不依赖 DSH。用非官方框架，<b>小号有被冻结的风险</b>。装法见 <code>panel/qq/README.md</code>。</p>
+        <div class="cfg-grid">
+          ${sel('qq.mode', '用哪个', [['official', '官方机器人（DSH 插件）'], ['onebot', '她自己的 QQ 小号（NapCat）']])}
+          <div><label class="f">你的 QQ 号</label><input data-path="qq.ownerQQ" value="${esc(c.qq.ownerQQ || '')}" placeholder="她只跟你说话" autocomplete="off"></div>
+          <div><label class="f">NapCat 地址</label><input data-path="qq.wsUrl" value="${esc(c.qq.wsUrl)}" autocomplete="off"><div class="hint">NapCat 里建的「WebSocket 服务器」</div></div>
+          <div><label class="f">NapCat token</label><input type="password" id="onebotToken" placeholder="留空不改" autocomplete="off"></div>
+          ${tog('qq.reachOut', '白天会主动找你', '隔了很久没听到你说话，她自己想想要不要找你')}
+          ${num('qq.reachOutMax', '一天最多主动找几次', { max: 10 })}
+          ${num('qq.silentHours', '你多久没说话才找（小时）', { min: 1, max: 24 })}
+          ${num('qq.activeStart', '主动找你（从几点）', { max: 23 })}
+          ${num('qq.activeEnd', '主动找你（到几点）', { max: 24 })}
+        </div>
+        <div class="row" style="margin-top:10px"><button class="btn sm" id="qqTest">用小号发一条测试</button><button class="btn sm" id="qqImport">从 DSH 带记忆过来</button><span class="small muted" id="qqMsg"></span></div>
+        <details style="margin-top:10px"><summary class="small">她记得的关于你的事（<span id="qqFactN">0</span> 条；记错了能删）</summary><div id="qqFacts" class="small"></div></details>
+      </div>
+      <div class="cfg-sec">
         <h3>📮 QQ 提醒 <span id="ntState"></span></h3>
         <p>起草好要你审的东西（今晚的日记、想发的评论、想回的话），她会在 QQ 里主动跟你说。你直接回「可以」她就发，回「改成……」就按你的改，「算了」就丢掉。
         用的是 QQ 官方机器人的<b>主动消息</b>，平台有条数限额；没发出去也没关系，下次你找她聊天时她会先问你。</p>
@@ -769,7 +787,7 @@ async function pageAutopilot(main) {
     if (body.vip) delete body.vip.users; // 名单走单独的接口，别被这个页面里的旧名单覆盖
     const k = $('#llmKey').value.trim();
     if (k) body.llmApiKey = k;
-    for (const id of ['qqAppId', 'qqAppSecret', 'qqOpenId']) {
+    for (const id of ['qqAppId', 'qqAppSecret', 'qqOpenId', 'onebotToken']) {
       const v = $('#' + id)?.value.trim();
       if (v) body[id] = v;
     }
@@ -804,7 +822,7 @@ async function pageAutopilot(main) {
     $('#ntState').innerHTML = n.ready ? '<span class="chip green">机器人可用</span>' : `<span class="chip amber">${esc(n.why || '未配置')}</span>`;
     const last = n.log[0];
     $('#ntMsg').textContent = `今天提醒了 ${n.sentToday} 次` +
-      (n.windowOpen ? ` · 回复窗口开着（到 ${hm(n.windowUntil)}）` : ' · 你最近一小时没在 QQ 说话，提醒会等你开口再发') +
+      (n.direct ? ' · 用小号发，随时能说' : n.windowOpen ? ` · 回复窗口开着（到 ${hm(n.windowUntil)}）` : ' · 你最近一小时没在 QQ 说话，提醒会等你开口再发') +
       (n.pending ? ` · ${n.pending} 条排队中` : '') +
       (last ? ` · 最近一次${last.ok ? '成功' : '失败：' + (last.error || '')}` : '');
   }).catch(() => {});
@@ -814,6 +832,28 @@ async function pageAutopilot(main) {
     await api('/api/notify/test', {});
     toast('发出去了，看看 QQ');
     ntRefresh();
+  });
+  // QQ 连接
+  const qqRender = (q) => {
+    $('#qqState').innerHTML = q.mode !== 'onebot' ? '<span class="chip">官方机器人</span>'
+      : q.connected ? `<span class="chip green">小号在线 ${esc(String(q.selfId || ''))}</span>` : `<span class="chip amber">${q.on ? '小号没连上' : '还没填你的 QQ 号'}</span>`;
+    $('#qqMsg').textContent = q.mode === 'onebot' ? [q.error && !q.connected ? `上次的错：${q.error}` : '', q.lastOwnerAt ? `你上次说话 ${ago(q.lastOwnerAt)}` : ''].filter(Boolean).join(' · ') : '';
+    $('#qqFactN').textContent = q.facts.length;
+    $('#qqFacts').innerHTML = q.facts.length ? q.facts.slice().reverse().map((f) => `<div class="row" style="justify-content:space-between;gap:8px;padding:3px 0"><span><span class="chip">${esc(f.kind)}</span> ${esc(f.text)} <span class="muted">${esc(f.at)}</span></span><button class="btn sm ghost" data-fact="${esc(f.id)}">×</button></div>`).join('') : '<div class="empty">还没记什么</div>';
+    for (const b of $$('[data-fact]', main)) b.onclick = () => busy(b, async () => qqRender(await api('/api/qq/fact/delete', { id: b.dataset.fact })));
+  };
+  api('/api/qq').then(qqRender).catch(() => {});
+  $('#qqTest').onclick = (e) => busy(e.target, async () => {
+    await save();
+    await new Promise((r) => setTimeout(r, 1500)); // 刚改设置的话等它连上
+    await api('/api/qq/test', {});
+    toast('发出去了，看看 QQ');
+    qqRender(await api('/api/qq'));
+  });
+  $('#qqImport').onclick = (e) => busy(e.target, async () => {
+    const r = await api('/api/qq/import-dsh', {});
+    toast(r.why || `带过来 ${r.added} 条，现在一共记得 ${r.total} 条`);
+    qqRender(r);
   });
   const un = $('#unlockCoin');
   if (un) un.onclick = async () => {

@@ -113,7 +113,15 @@ export function usageView() {
  * opts.tag        记账分类（mind / social / comment / memory / task …）
  * opts.essential  你点的、你派的活：不受每天预算限制
  */
-export async function chat(messages, { maxTokens = 300, temperature = 0.9, tag = 'other', essential = false } = {}) {
+export async function chat(messages, opts = {}) {
+  return (await chatRaw(messages, opts)).content;
+}
+
+/**
+ * 完整版：可以带 tools（OpenAI 兼容的 function calling），返回整条 message（content + tool_calls）。
+ * QQ 小号那边的她（qq/brain.mjs）靠这个自己调工具。
+ */
+export async function chatRaw(messages, { maxTokens = 300, temperature = 0.9, tag = 'other', essential = false, tools, model } = {}) {
   const cfg = readConfig().llm;
   if (!essential && !budgetLeft().ok) {
     const u = readUsage();
@@ -123,24 +131,27 @@ export async function chat(messages, { maxTokens = 300, temperature = 0.9, tag =
     }
     throw new BudgetError('今天的模型预算用完了');
   }
+  const body = { model: String(model || cfg.model || '').trim(), messages, max_tokens: maxTokens, temperature };
+  if (tools?.length) body.tools = tools;
   let res;
   try {
     res = await fetch(endpoint('/chat/completions'), {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ model: String(cfg.model || '').trim(), messages, max_tokens: maxTokens, temperature }),
-      signal: AbortSignal.timeout(60000),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90000),
     });
   } catch (e) {
     throw new Error(`连不上模型接口（${e.cause?.code || e.message}），检查地址，或者对应的服务有没有在跑`);
   }
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`模型接口报错：${explain(res.status, j.error?.message || j.message)}`);
-  const out = String(j.choices?.[0]?.message?.content || '').trim();
+  const msg = j.choices?.[0]?.message || {};
+  const out = String(msg.content || '').trim();
   // 接口没回 usage 就按字数估（中文大约 1 字 1 token 多一点）
   const est = Math.round((JSON.stringify(messages).length + out.length) / 1.5);
   try { record(tag, Number(j.usage?.total_tokens) || est, essential); } catch { /* 记账失败不影响 */ }
-  return out;
+  return { content: out, toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [], raw: msg };
 }
 
 /** 列出接口支持的模型（OpenAI 兼容的 GET /models） */

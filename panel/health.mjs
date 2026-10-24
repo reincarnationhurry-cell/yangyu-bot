@@ -5,7 +5,9 @@
  * 一个个写死（peerDependencies），DSH 一自动升级、插件还没跟上，宿主就不加载它 —— 设置里「IM 助理」消失，
  * QQ 网关不启动，号主那边只看到她不回了（2026-10-24 就这么掉过一次）。
  *
- * 这里每 5 分钟看一眼，查两件事：
+ * 换成 QQ 小号（qq.mode = onebot）以后就不靠插件了，改查小号连没连上 NapCat。
+ *
+ * 用官方机器人时，这里每 5 分钟看一眼，查两件事：
  *  1. 版本对不对得上：DSH.app 的版本在不在插件声明支持的列表里；
  *  2. 网关活没活：DSH 在跑的话，它这次启动之后 gateway.log 里有没有「网关就绪」。
  * 出问题就在面板顶上挂红条，并弹一条 macOS 通知（同一个问题只弹一次）—— QQ 断了，没法在 QQ 里告诉你。
@@ -14,7 +16,8 @@ import { readFileSync, statSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { logAction } from './store.mjs';
+import { logAction, readConfig } from './store.mjs';
+import * as qq from './qq/index.mjs';
 
 const HOME = homedir();
 const APP = process.env.DSH_APP || '/Applications/DeepSeek Harness.app';
@@ -80,13 +83,27 @@ export function diagnose({ host, plugin, startedAt, gateway, now = Date.now() })
   return { ok: !problems.length, problems, host, plugin: plugin ? { version: plugin.version } : null, dshRunning: !!startedAt };
 }
 
+/** 小号：配好了没、连上了没（刚启动给 3 分钟） */
+export function diagnoseOnebot(st, now = Date.now()) {
+  const problems = [];
+  if (!st.on) problems.push({ code: 'onebot-config', text: 'QQ 连接选了「小号」，但还没填你的 QQ 号', fix: '面板「自动养号 → QQ 连接」填上你的 QQ 号' });
+  else if (!st.connected && st.startedAt && now - st.startedAt > 3 * 60_000) {
+    problems.push({ code: 'onebot', text: `QQ 小号没连上 NapCat${st.error ? `（${st.error}）` : ''}，她收不到你的消息`, fix: '确认 QQ（装了 NapCat 的那个）开着、小号登录着，面板里的地址和 token 跟 NapCat 的对得上' });
+  }
+  return { ok: !problems.length, problems, mode: 'onebot', connected: st.connected, selfId: st.selfId };
+}
+
 let last = { ok: true, problems: [], checkedAt: 0 };
 const notified = new Set();
 
 /** 现查一次（顺手记录、弹通知） */
 export function check({ notify = true } = {}) {
+  if (readConfig().qq.mode === 'onebot') return report(diagnoseOnebot(qq.status()), notify);
   if (!existsSync(APP)) return (last = { ok: true, problems: [], skipped: '没装 DSH 桌面版', checkedAt: Date.now() });
-  const r = diagnose({ host: hostVersion(), plugin: pluginInfo(), startedAt: hostStartedAt(), gateway: lastGatewayReady() });
+  return report(diagnose({ host: hostVersion(), plugin: pluginInfo(), startedAt: hostStartedAt(), gateway: lastGatewayReady() }), notify);
+}
+
+function report(r, notify) {
   for (const p of r.problems) {
     if (notified.has(p.code)) continue;
     notified.add(p.code);

@@ -17,3 +17,7 @@ node_modules/
 # 角色参考图来源不明的话别公开；生成的语音样例也不需要
 stickers/_ref/
 tts/*.mp4
+
+# ── NapCat（Docker 版）：小号登录态、WebUI 密钥 ──
+panel/qq/napcat/data/
+panel/qq/napcat/.env

@@ -226,6 +226,19 @@ export const DEFAULT_CONFIG = {
     comment: true, // 按「评论」的方式（交给她 / AI 起草）来，计入每日上限
     likeDynamic: true, // 图文/文字动态顺手点个赞
   },
+  // QQ 怎么接：official = DSH + dsh-im-connect 插件 + QQ 官方机器人（只能在你说话后一小时内回）；
+  // onebot = 她自己的 QQ 小号（本机 NapCat），面板自己当大脑，能主动找你。token 在 secrets.json
+  qq: {
+    mode: 'official',
+    wsUrl: 'ws://127.0.0.1:3001', // NapCat 的 OneBot v11 正向 WebSocket
+    ownerQQ: '', // 你的 QQ 号：她只跟你说话，别人私聊不理
+    model: '', // 聊天用的模型，空 = 跟上面「模型」一样
+    reachOut: true, // 白天隔了很久没听到你说话，她会自己想想要不要找你
+    reachOutMax: 2, // 一天最多主动找几次
+    silentHours: 4, // 你多久没说话才算「隔了很久」
+    activeStart: 9, // 只在这段时间里主动找（点）
+    activeEnd: 22,
+  },
   // 有东西要你审时，让她在 QQ 里主动叫你（QQ 官方机器人的单聊主动消息，平台有限额）
   notify: {
     enabled: false,

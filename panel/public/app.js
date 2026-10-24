@@ -698,7 +698,8 @@ async function pageAutopilot(main) {
         <div class="cfg-grid" style="margin-top:6px">
           ${tog('qq.dsh.enabled', '外挂：查资料 / 看图 / 做表情包', '借 DSH：查资料走她专用的 DSH 配置，看图和做表情走 DSH 本地网关')}
           <div><label class="f">看图用的模型</label><input data-path="qq.dsh.visionModel" value="${esc(c.qq.dsh.visionModel)}" autocomplete="off"></div>
-          <div><label class="f">做表情用的改图模型</label><input data-path="qq.dsh.imageModel" value="${esc(c.qq.dsh.imageModel)}" autocomplete="off"><div class="hint">ModelScope 的要先绑阿里云账号</div></div>
+          <div><label class="f">做表情用的改图模型（ModelScope）</label><input data-path="qq.dsh.imageModel" value="${esc(String(c.qq.dsh.imageModel).replace(/^modelscope\//, ''))}" autocomplete="off"><div class="hint">ModelScope 上的模型 ID</div></div>
+          <div><label class="f">ModelScope 访问令牌</label><input type="password" id="modelscopeToken" placeholder="留空不改" autocomplete="off"><div class="hint">modelscope.cn/my/myaccesstoken 生成；账号要绑阿里云、过实名认证</div></div>
         </div>
         <div class="small muted" id="qqDsh" style="margin-top:4px"></div>
         <div class="row" style="margin-top:10px"><button class="btn sm" id="qqTest">用小号发一条测试</button><button class="btn sm" id="qqImport">从 DSH 带记忆过来</button><span class="small muted" id="qqMsg"></span></div>
@@ -793,7 +794,7 @@ async function pageAutopilot(main) {
     if (body.vip) delete body.vip.users; // 名单走单独的接口，别被这个页面里的旧名单覆盖
     const k = $('#llmKey').value.trim();
     if (k) body.llmApiKey = k;
-    for (const id of ['qqAppId', 'qqAppSecret', 'qqOpenId', 'onebotToken']) {
+    for (const id of ['qqAppId', 'qqAppSecret', 'qqOpenId', 'onebotToken', 'modelscopeToken']) {
       const v = $('#' + id)?.value.trim();
       if (v) body[id] = v;
     }
@@ -845,7 +846,7 @@ async function pageAutopilot(main) {
       : q.connected ? `<span class="chip green">小号在线 ${esc(String(q.selfId || ''))}</span>` : `<span class="chip amber">${q.on ? '小号没连上' : '还没填你的 QQ 号'}</span>`;
     $('#qqMsg').textContent = q.mode === 'onebot' ? [q.error && !q.connected ? `上次的错：${q.error}` : '', q.lastOwnerAt ? `你上次说话 ${ago(q.lastOwnerAt)}` : ''].filter(Boolean).join(' · ') : '';
     const d = q.dsh || {};
-    $('#qqDsh').textContent = !d.enabled ? '外挂关着' : !d.cli ? '⚠️ 没找到 DSH 的命令行，查资料用不了' : !d.profile ? `⚠️ DSH 里还没有「她专用」的配置，查资料用不了（见 panel/qq/README.md）` : `外挂就绪：查资料走她专用的 DSH${d.stickerOn ? ` · 今天（${d.stickerOn}）做过新表情了` : ''}`;
+    $('#qqDsh').textContent = !d.enabled ? '外挂关着' : !d.cli ? '⚠️ 没找到 DSH 的命令行，查资料用不了' : !d.profile ? `⚠️ DSH 里还没有「她专用」的配置，查资料用不了（见 panel/qq/README.md）` : `外挂就绪：查资料走她专用的 DSH · ${d.hasModelscopeToken ? '做表情包：令牌已填' : '做表情包：还没填 ModelScope 令牌'}${d.stickerOn ? ` · 今天（${d.stickerOn}）做过新表情了` : ''}`;
     $('#qqFactN').textContent = q.facts.length;
     $('#qqFacts').innerHTML = q.facts.length ? q.facts.slice().reverse().map((f) => `<div class="row" style="justify-content:space-between;gap:8px;padding:3px 0"><span><span class="chip">${esc(f.kind)}</span> ${esc(f.text)} <span class="muted">${esc(f.at)}</span></span><button class="btn sm ghost" data-fact="${esc(f.id)}">×</button></div>`).join('') : '<div class="empty">还没记什么</div>';
     for (const b of $$('[data-fact]', main)) b.onclick = () => busy(b, async () => qqRender(await api('/api/qq/fact/delete', { id: b.dataset.fact })));

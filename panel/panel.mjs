@@ -221,7 +221,8 @@ const routes = {
   // 自动养号
   'GET /api/autopilot': async () => autopilotView(),
   'POST /api/autopilot/config': async (_q, b) => {
-    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, onebotToken, ...patch } = b;
+    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, onebotToken, modelscopeToken, ...patch } = b;
+    if (typeof modelscopeToken === 'string' && modelscopeToken.trim()) writeSecrets({ modelscopeToken: modelscopeToken.trim() });
     if (typeof llmApiKey === 'string') writeSecrets({ llmApiKey: llmApiKey.trim() });
     if (typeof onebotToken === 'string' && onebotToken.trim()) writeSecrets({ onebotToken: onebotToken.trim() });
     // QQ 提醒的凭证：只存本机 secrets.json，留空表示不改

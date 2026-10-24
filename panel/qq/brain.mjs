@@ -86,7 +86,9 @@ export function toolDefs() {
     }, ['question']),
     fn('make_sticker', '给自己做一张新表情包：拿一张现有的当底图，只改表情和动作。一天最多一张，做好了会自己发给号主', {
       en: { type: 'string', description: '一个英文小写词，比如 yawn' }, zh: { type: 'string', description: '一两个中文字，比如 打哈欠' },
-      look: { type: 'string', description: '想要的样子，比如「捂着嘴打哈欠，眼角有泪花」' }, when: { type: 'string', description: '什么时候用' },
+      look: { type: 'string', description: '想要的样子，比如「捂着嘴打哈欠，眼角有泪花」' },
+      look_en: { type: 'string', description: '同样的意思用英文写一遍（生图模型对英文更准），比如 yawning with a hand over mouth, teary eyes' },
+      when: { type: 'string', description: '什么时候用' },
       base: { type: 'string', enum: stickerNames(), description: '拿哪张当底图，默认 happy_开心' },
     }, ['en', 'zh', 'look']),
     fn('reviews', '看看有哪些等号主点头的待审（日记、评论、回复）'),
@@ -155,7 +157,7 @@ export async function runTool(name, args, out) {
     }
     case 'make_sticker': {
       if (readState().stickerOn === localDate()) return '今天已经做过一张了，明天再说';
-      out.makeSticker = { en: a.en, zh: a.zh, look: a.look, when: a.when, base: stickerNames().includes(a.base) ? a.base : 'happy_开心' };
+      out.makeSticker = { en: a.en, zh: a.zh, look: a.look, lookEn: a.look_en, when: a.when, base: stickerNames().includes(a.base) ? a.base : 'happy_开心' };
       return '开始做了，做好了会自己发给他；这条回复可以说一声「等我给自己画张新表情」';
     }
     case 'reviews': {

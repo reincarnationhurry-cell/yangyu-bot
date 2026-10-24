@@ -76,7 +76,7 @@ Docker 和镜像都是你自己装、自己拉（面板不替你下载运行第�
 |---|---|---|
 | **查资料** | 她调 `research`，先回「等我查一下」；后台用 DSH 官方命令行 `dsh --profile yangyu --json "任务"` 去搜、去读网页，查到了她用自己的话跟你说（带一个来源链接） | 她专用的 DSH 配置 + 免费搜索插件 |
 | **看图** | 你发的图先下载下来，交给能看图的模型描述成一段话，她照着回 | DSH 本地网关里的 `openai-codex/gpt-5.6-luna` |
-| **做表情包** | 她觉得现有的都不合适时调 `make_sticker`：拿一张现有表情当底图，只改表情和动作（长相不变），存进 `stickers/` 并写进 `INDEX.md`，做好了发给你。一天最多一张 | DSH 本地网关里的改图模型 `Qwen-Image-Edit` |
+| **做表情包** | 她觉得现有的都不合适时调 `make_sticker`：拿一张现有表情当底图，只改表情和动作（长相不变），存进 `stickers/` 并写进 `INDEX.md`，做好了发给你。一天最多一张 | 直连 ModelScope 的生图接口，模型 `Qwen/Qwen-Image-Edit` |
 
 **她专用的 DSH 配置**（`~/.dsh/profiles/yangyu`，源文件在 `panel/qq/dsh-profile/`）：
 
@@ -91,11 +91,20 @@ Docker 和镜像都是你自己装、自己拉（面板不替你下载运行第�
 - 给了预算：最多搜 3 次、打开 4 个网页，3 分钟没查完就停（不会把半截话当答案）。实测一个问题 20~70 秒。
 - 用的是 DSH 公开的命令行，不是它的内部接口，DSH 升级不容易坏；桌面版 DSH 升级或免费搜索插件更新后，重跑一次 `setup.sh`。
 
-**做表情包要你先做一件事**：网关里的改图模型来自 ModelScope，要先在 ModelScope 网站上把账号**绑定阿里云**
-（不绑会报 `Please bind your Alibaba Cloud account`）。绑好之前她想做新表情会失败，只记一笔，不影响别的。
-想换别的改图模型，在面板「QQ 连接」里改「做表情用的改图模型」。
+**做表情包**直连 ModelScope 的生图接口（DSH 网关只会用聊天接口调改图模型，会被拒）。字段照
+[官方文档](https://modelscope.cn/docs/model-service/API-Inference/intro)「AIGC模型」一节：
+`POST /v1/images/generations` 带 `X-ModelScope-Async-Mode: true` 提交，拿 `task_id`；
+每 5 秒 `GET /v1/tasks/<task_id>`（带 `X-ModelScope-Task-Type: image_generation`），`task_status` 是 `SUCCEED` 就下载 `output_images[0]`。
+底图用 base64 传（`image_url: ["data:image/png;base64,…"]`），提示词用英文（官方建议）。最多等 4 分钟，做好的图转成 512×512 PNG。
 
-**这些都要桌面版 DSH 开着**：本地网关是桌面版里的 codearts 插件开的。其实面板聊天用的模型本来也走这个网关。
+要你准备的：
+- ModelScope 账号**绑定阿里云**并**通过实名认证**（官方要求，不然调不了）。
+- 在 [modelscope.cn/my/myaccesstoken](https://modelscope.cn/my/myaccesstoken) 生成访问令牌，填进面板「QQ 连接 → ModelScope 访问令牌」（只存在本机 `panel/data/secrets.json`）。
+- 想换改图模型，改「做表情用的改图模型」，填 ModelScope 上的模型 ID。
+
+没填令牌时她想做新表情会失败，只记一笔，不影响别的。
+
+**查资料、看图要桌面版 DSH 开着**：本地网关是桌面版里的 codearts 插件开的。其实面板聊天用的模型本来也走这个网关。
 
 ## 文件
 
@@ -105,5 +114,5 @@ Docker 和镜像都是你自己装、自己拉（面板不替你下载运行第�
 | `brain.mjs` | 大脑：人设、上下文、工具、回复、语音、主动找你 |
 | `owner.mjs` | 关于你的事、聊天记录、每晚整理、从 DSH 带记忆 |
 | `index.mjs` | 把上面串起来：只理你、合并连发、看图、发回去、外挂的活做完了告诉你、每分钟看看要不要主动找你 |
-| `dsh.mjs` | 外挂：查资料（DSH 命令行）、看图、做表情包（DSH 网关） |
+| `dsh.mjs` | 外挂：查资料（DSH 命令行）、看图（DSH 网关）、做表情包（ModelScope 生图接口） |
 | `dsh-profile/` | 她专用的 DSH 配置和安装脚本 |

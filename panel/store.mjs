@@ -243,7 +243,7 @@ export const DEFAULT_CONFIG = {
       enabled: true,
       profile: 'yangyu', // ~/.dsh/profiles/yangyu：只留联网搜索，其他工具都关掉
       visionModel: 'openai-codex/gpt-5.6-luna', // 能看图的模型
-      imageModel: 'modelscope/Qwen/Qwen-Image-Edit', // 改图模型（拿现有表情当底图改表情）
+      imageModel: 'Qwen/Qwen-Image-Edit', // ModelScope 上的改图模型（拿现有表情当底图改表情），令牌在 secrets.json 的 modelscopeToken
     },
   },
   // 有东西要你审时，让她在 QQ 里主动叫你（QQ 官方机器人的单聊主动消息，平台有限额）

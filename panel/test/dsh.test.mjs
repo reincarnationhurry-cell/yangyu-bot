@@ -4,6 +4,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, mkdtempSync, rmSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -93,12 +94,68 @@ test('describeImage：用看图模型，图片走 data URL', async () => {
   assert.match(req.messages[0].content[1].image_url.url, /^data:image\/png;base64,/);
 });
 
-test('imageFromReply：data URL、http 地址、images 数组都认，不是图的不要', async () => {
-  const b64 = PNG.toString('base64');
-  assert.ok((await dsh.imageFromReply({ content: `给你 ![](data:image/png;base64,${b64})` })).equals(PNG));
-  assert.ok((await dsh.imageFromReply({ images: [{ image_url: { url: `data:image/png;base64,${b64}` } }] })).equals(PNG));
-  assert.ok((await dsh.imageFromReply({ content: `好了：${base}/img.png` })).equals(PNG));
-  assert.equal(await dsh.imageFromReply({ content: '我画不了' }), null);
+// 假的 ModelScope：提交 → 前两次查还在跑 → 做好了给图片地址
+function fakeModelscope({ fail = false } = {}) {
+  const seen = [];
+  let polls = 0;
+  const fn = async (url, init = {}) => {
+    seen.push({ url, method: init.method || 'GET', headers: init.headers || {}, body: init.body ? JSON.parse(init.body) : null });
+    const json = (o, status = 200) => ({ ok: status < 400, status, json: async () => o });
+    if (url.endsWith('/v1/images/generations')) return json({ task_id: 't-1' });
+    if (url.includes('/v1/tasks/t-1')) {
+      polls++;
+      if (polls < 3) return json({ task_status: 'RUNNING' });
+      return json(fail ? { task_status: 'FAILED', errors: { message: '内容不合规' } } : { task_status: 'SUCCEED', output_images: ['https://cdn.example/out.png'] });
+    }
+    if (url === 'https://cdn.example/out.png') return { ok: true, status: 200, arrayBuffer: async () => PNG };
+    throw new Error(`没想到会请求 ${url}`);
+  };
+  return { fn, seen };
+}
+
+test('modelscopeEdit：按官方文档的字段提交、轮询、取图', async () => {
+  const ms = fakeModelscope();
+  const buf = await dsh.modelscopeEdit({ prompt: 'yawn', image: 'data:image/png;base64,AAA', model: 'Qwen/Qwen-Image-Edit', token: 'ms-tk', fetchFn: ms.fn, sleep: async () => {} });
+  assert.ok(buf.equals(PNG));
+  const [sub, poll] = ms.seen;
+  assert.equal(sub.url, 'https://api-inference.modelscope.cn/v1/images/generations');
+  assert.equal(sub.method, 'POST');
+  assert.equal(sub.headers.Authorization, 'Bearer ms-tk');
+  assert.equal(sub.headers['X-ModelScope-Async-Mode'], 'true');
+  assert.deepEqual(sub.body, { model: 'Qwen/Qwen-Image-Edit', prompt: 'yawn', image_url: ['data:image/png;base64,AAA'] });
+  assert.equal(poll.url, 'https://api-inference.modelscope.cn/v1/tasks/t-1');
+  assert.equal(poll.headers['X-ModelScope-Task-Type'], 'image_generation');
+  assert.equal(ms.seen.filter((x) => x.url.includes('/tasks/')).length, 3, '没做好就接着查');
+});
+
+test('modelscopeEdit：失败、没令牌都说清楚', async () => {
+  const ms = fakeModelscope({ fail: true });
+  await assert.rejects(dsh.modelscopeEdit({ prompt: 'x', image: 'd', model: 'm', token: 't', fetchFn: ms.fn, sleep: async () => {} }), /生图失败：内容不合规/);
+  await assert.rejects(dsh.modelscopeEdit({ prompt: 'x', image: 'd', model: 'm', token: '' }), /访问令牌/);
+});
+
+test('makeSticker：做好的图存成 512×512，写进 INDEX.md 的表格，一天只做一张', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stickers-'));
+  writeFileSync(join(dir, 'happy_开心.png'), PNG);
+  writeFileSync(join(dir, 'INDEX.md'), '| `happy_开心.png` | 开心 | 好事 |\n\n## 模板\n');
+  process.env.YANGYU_STICKERS = dir;
+  const d2 = await import('../qq/dsh.mjs?stickers');
+  store.writeSecrets({ modelscopeToken: 'ms-tk' });
+  store.writeConfig({ qq: { dsh: { imageModel: 'modelscope/Qwen/Qwen-Image-Edit' } } }); // 旧设置带前缀也认
+  store.writeState({ ...store.readState(), stickerOn: null });
+  let asked;
+  const name = await d2.makeSticker({ en: 'yawn', zh: '哈欠', look: '打哈欠', lookEn: 'yawning', when: '困的时候', edit: async (x) => { asked = x; return PNG; } });
+  assert.equal(name, 'yawn_哈欠');
+  assert.equal(asked.model, 'Qwen/Qwen-Image-Edit');
+  assert.match(asked.prompt, /yawning \/ 打哈欠/);
+  assert.match(asked.image, /^data:image\/png;base64,/);
+  assert.ok(existsSync(join(dir, 'yawn_哈欠.png')));
+  const size = execFileSync('/usr/bin/sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', join(dir, 'yawn_哈欠.png')], { encoding: 'utf-8' });
+  assert.match(size, /pixelWidth: 512[\s\S]*pixelHeight: 512/);
+  assert.match(readFileSync(join(dir, 'INDEX.md'), 'utf-8'), /好事 \|\n\| `yawn_哈欠.png` \| 哈欠 \| 困的时候 \|\n\n## 模板/);
+  await assert.rejects(d2.makeSticker({ en: 'cry', zh: '哭', look: '哭', edit: async () => PNG }), /今天已经做过/);
+  delete process.env.YANGYU_STICKERS;
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test('addIndexRow：插到表格最后一行后面，不是文件末尾', () => {
@@ -123,8 +180,8 @@ test('brain：research / make_sticker 只记下要做的事，真正去做在后
   assert.match(await brain.runTool('research', { question: '明天会下雨吗' }, out), /等我查一下/);
   assert.equal(out.research, '明天会下雨吗');
   store.writeState({ ...store.readState(), stickerOn: null });
-  await brain.runTool('make_sticker', { en: 'yawn', zh: '哈欠', look: '打哈欠', base: '不存在的' }, out);
-  assert.deepEqual(out.makeSticker, { en: 'yawn', zh: '哈欠', look: '打哈欠', when: undefined, base: 'happy_开心' });
+  await brain.runTool('make_sticker', { en: 'yawn', zh: '哈欠', look: '打哈欠', look_en: 'yawning', base: '不存在的' }, out);
+  assert.deepEqual(out.makeSticker, { en: 'yawn', zh: '哈欠', look: '打哈欠', lookEn: 'yawning', when: undefined, base: 'happy_开心' });
   assert.ok(brain.toolDefs().some((t) => t.function.name === 'research'));
 });
 

@@ -9,10 +9,10 @@
  *    网页里就算藏了指令也没有手去碰你的文件。用的是公开的命令行，不是 DSH 的内部接口，升级不容易坏。
  *    每次在 data/dsh-jobs/<id>/ 这个空目录里跑，权限再压成只读。
  *  - 看图（describeImage）：号主发来的图，交给 DSH 本地网关里能看图的模型描述成一段话，她照着回。
- *  - 做表情包（makeSticker）：拿现有的一张表情当底图，让网关里的改图模型只改表情和动作（角色长相不变），
- *    存进 stickers/，下次聊天就能发。一天最多一张。
+ *  - 做表情包（makeSticker）：拿现有的一张表情当底图，交给 ModelScope 的改图模型（直连它的生图接口，异步提交、轮询结果）
+ *    只改表情和动作（角色长相不变），存进 stickers/，下次聊天就能发。一天最多一张。
  *
- * 模型都走 DSH 桌面版的本地网关（面板「模型」那里填的地址），桌面版 DSH 得开着。
+ * 查资料、看图走 DSH 桌面版的本地网关（面板「模型」那里填的地址），桌面版 DSH 得开着；做表情包直连 ModelScope。
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
@@ -24,14 +24,14 @@ import { DATA, ROOT, readConfig, readSecrets, readState, writeState, logAction, 
 const DSH_BIN = process.env.DSH_BIN || '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh';
 const PROFILE_DIR = (name) => join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'profiles', name);
 const JOBS = join(DATA, 'dsh-jobs');
-const STICKERS = join(ROOT, 'stickers');
+const STICKERS = process.env.YANGYU_STICKERS || join(ROOT, 'stickers'); // 测试时指到临时目录
 
 export function status(cfg = readConfig().qq.dsh) {
   return {
     enabled: cfg.enabled,
     cli: existsSync(DSH_BIN),
     profile: existsSync(join(PROFILE_DIR(cfg.profile), 'cordis.patch.yml')),
-    visionModel: cfg.visionModel, imageModel: cfg.imageModel,
+    visionModel: cfg.visionModel, imageModel: cfg.imageModel, hasModelscopeToken: !!readSecrets().modelscopeToken,
     stickerOn: readState().stickerOn || null,
   };
 }
@@ -132,40 +132,59 @@ export async function describeImage(buf, { hint = '' } = {}) {
 // ─── 做表情包 ──────────────────────────────────────────────
 export const stickerName = (en, zh) => `${String(en).toLowerCase().replace(/[^a-z]/g, '').slice(0, 16)}_${String(zh).replace(/[^一-鿿]/g, '').slice(0, 4)}`;
 
-/** 改图模型回的东西各家不一样：data URL、http 地址、markdown 图片、images 数组都认 */
-export async function imageFromReply(msg, { fetchFn = fetch } = {}) {
-  const cands = [];
-  const scan = (v) => {
-    if (!v) return;
-    if (typeof v === 'string') {
-      for (const m of v.matchAll(/data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g)) cands.push(m[0]);
-      for (const m of v.matchAll(/https?:\/\/[^\s)"']+/g)) cands.push(m[0]);
-      return;
+// ─── ModelScope 生图接口（异步：提交任务 → 轮询结果）────────────────
+// 字段照官方文档：https://modelscope.cn/docs/model-service/API-Inference/intro 的「AIGC模型」一节。
+// 网关只会用聊天接口调它（会被 403），所以这里直连。要 ModelScope 账号绑了阿里云、通过实名认证，令牌在面板里填。
+const MS_BASE = 'https://api-inference.modelscope.cn/';
+
+/**
+ * 提交一个改图任务，等它做完，返回图片的字节。
+ * image：底图的 data URL（官方文档支持 base64 输入，image_url 传数组）。
+ * 每 5 秒查一次，最多等 timeoutMs。
+ */
+export async function modelscopeEdit({ prompt, image, model, token, timeoutMs = 4 * 60_000, pollMs = 5000, fetchFn = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+  if (!token) throw new Error('还没填 ModelScope 的访问令牌（面板「QQ 连接」里填）');
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  const sub = await fetchFn(`${MS_BASE}v1/images/generations`, {
+    method: 'POST',
+    headers: { ...headers, 'X-ModelScope-Async-Mode': 'true' },
+    body: JSON.stringify({ model, prompt: String(prompt).slice(0, 1900), image_url: [image] }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const sj = await sub.json().catch(() => ({}));
+  if (!sub.ok || !sj.task_id) throw new Error(`ModelScope 没接这个任务（HTTP ${sub.status}${sj.message || sj.errors?.message ? `：${sj.message || sj.errors.message}` : ''}）`);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(pollMs);
+    const r = await fetchFn(`${MS_BASE}v1/tasks/${encodeURIComponent(sj.task_id)}`, {
+      headers: { ...headers, 'X-ModelScope-Task-Type': 'image_generation' },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!r.ok) continue; // 偶尔查不到就下一轮再查
+    const d = await r.json().catch(() => ({}));
+    if (d.task_status === 'SUCCEED') {
+      const url = d.output_images?.[0];
+      if (!url) throw new Error('ModelScope 说做好了，但没给图');
+      const img = await fetchFn(url, { signal: AbortSignal.timeout(60000) });
+      const buf = Buffer.from(await img.arrayBuffer());
+      if (!img.ok || !isImage(buf)) throw new Error('图片下载下来不对');
+      return buf;
     }
-    if (Array.isArray(v)) { v.forEach(scan); return; }
-    if (typeof v === 'object') { scan(v.image_url?.url ?? v.url); scan(v.b64_json && `data:image/png;base64,${v.b64_json}`); scan(v.text); }
-  };
-  scan(msg?.images);
-  scan(msg?.content);
-  for (const c of cands) {
-    if (c.startsWith('data:')) { const b = Buffer.from(c.slice(c.indexOf(',') + 1), 'base64'); if (isImage(b)) return b; continue; }
-    try {
-      const r = await fetchFn(c, { signal: AbortSignal.timeout(30000) });
-      const buf = Buffer.from(await r.arrayBuffer());
-      if (r.ok && isImage(buf)) return buf;
-    } catch { /* 下一个 */ }
+    if (d.task_status === 'FAILED') throw new Error(`ModelScope 生图失败${d.errors?.message ? `：${d.errors.message}` : ''}`);
   }
-  return null;
+  throw new Error(`等了 ${Math.round(timeoutMs / 60_000)} 分钟还没做好，先不等了`);
 }
 
 /**
  * 做一张新表情：base 是拿来改的那张（默认「开心」），en/zh 是新表情的名字，look 是想要的样子。
  * 一天最多一张（EXPAND.md 的规矩）。成功返回文件名（不带 .png）。
  */
-export async function makeSticker({ en, zh, look, base = 'happy_开心', when = '', now = new Date() }) {
+export async function makeSticker({ en, zh, look, lookEn = '', base = 'happy_开心', when = '', now = new Date(), edit = modelscopeEdit }) {
   const today = localDate(now);
   const st = readState();
   if (st.stickerOn === today) throw new Error('今天已经做过一张新表情了，明天再说');
+  const token = readSecrets().modelscopeToken;
+  if (!token) throw new Error('还没填 ModelScope 的访问令牌（面板「QQ 连接」里填）');
   const name = stickerName(en, zh);
   if (!/^[a-z]+_[一-鿿]+$/.test(name)) throw new Error('名字要一个英文词 + 一两个中文字，比如 yawn / 打哈欠');
   if (existsSync(join(STICKERS, `${name}.png`))) throw new Error(`已经有「${name}」这张了`);
@@ -173,15 +192,14 @@ export async function makeSticker({ en, zh, look, base = 'happy_开心', when = 
   if (!existsSync(basePath)) throw new Error(`没有「${base}」这张底图`);
   writeState({ ...st, stickerOn: today }); // 失败了今天也不再试，省额度
 
-  const img = readFileSync(basePath).toString('base64');
-  const r = await llm.chatRaw([
-    { role: 'user', content: [
-      { type: 'image_url', image_url: { url: `data:image/png;base64,${img}` } },
-      { type: 'text', text: `保持这个角色的长相、发型、服装和 Q 版画风完全不变，只改表情和动作：${String(look).slice(0, 120)}。纯白背景，角色居中，像聊天用的表情包，不要加文字。` },
-    ] },
-  ], { model: readConfig().qq.dsh.imageModel, maxTokens: 1000, temperature: 0.7, tag: 'qq', essential: true });
-  const buf = await imageFromReply(r.raw);
-  if (!buf) throw new Error(`改图模型没给出图片${r.content ? `（它说：${r.content.slice(0, 60)}）` : ''}`);
+  // 官方建议英文提示词；她给了英文描述就用英文的，中文的也带上
+  const want = [lookEn, look].filter(Boolean).map((x) => String(x).slice(0, 200)).join(' / ');
+  const buf = await edit({
+    model: String(readConfig().qq.dsh.imageModel || '').replace(/^modelscope\//, ''),
+    token,
+    image: `data:image/png;base64,${readFileSync(basePath).toString('base64')}`,
+    prompt: `Keep this character's face, hair, outfit and chibi art style exactly the same. Only change the facial expression and pose: ${want}. Plain white background, character centered, chat sticker style, no text.`,
+  });
   const file = join(STICKERS, `${name}.png`);
   const tmp = join(STICKERS, `.${name}.tmp`);
   writeFileSync(tmp, buf);

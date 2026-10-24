@@ -23,7 +23,7 @@ import * as lingo from './lingo.mjs';
 import {
   ROOT, SHICHEN, localDate, logAction, todayCounts, addTask, addReview as addReviewRaw, readReview, updateReview,
   readConfig, readState, writeState, readActions, readJsonl, appendJsonl, FILES, nowIso, readTasks,
-  ACTION_NAMES, blockedFor, addBlock, readVip, writeVip, updateTask, addWish,
+  ACTION_NAMES, blockedFor, addBlock, readVip, writeVip, updateTask, addWish, readPause,
 } from './store.mjs';
 
 const TICK_MS = 30_000;
@@ -182,6 +182,15 @@ async function tick() {
   // 排队的 QQ 提醒：你一开口就补上（不受自动养号开关影响）
   notify.flushPending(readReview).catch(() => {});
   if (!live.running) mind.maybeReflect().catch(() => {});
+  // 号主叫停了：叫停前就在刷的这一轮也停下（叫停之后他自己点的、派的照做）
+  const pause = readPause(now);
+  if (pause) {
+    if (live.running && Date.parse(live.startedAt) < Date.parse(pause.at) && !abortCtl?.signal.aborted) {
+      stopSession();
+      logAction({ kind: 'pause', source: SRC, detail: '号主叫停了，这一轮先收手' });
+    }
+    return;
+  }
   if (!cfg.enabled || live.running || social.isBusy()) return;
 
   if (gap > 5 * 60_000) {

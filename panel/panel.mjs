@@ -20,12 +20,13 @@ import * as notify from './notify.mjs';
 import * as mind from './mind.mjs';
 import * as memory from './memory.mjs';
 import * as social from './social.mjs';
+import * as sky from './sky.mjs';
 import { openAsHer } from './browser.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
   readReview, updateReview, readConfig, writeConfig, readSecrets, writeSecrets,
   readState, writeState, readJsonl, todayCounts, nowIso,
-  readBlocks, clearBlock, withBlock, ACTION_NAMES, readVip, writeVip, readWishes, finishWish,
+  readBlocks, clearBlock, withBlock, ACTION_NAMES, readVip, writeVip, readWishes, finishWish, readPause, clearPause,
 } from './store.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -77,6 +78,7 @@ function autopilotView() {
     live: auto.liveStatus(),
     lastRun: state.lastRun || null,
     cooldownUntil: state.cooldownUntil && state.cooldownUntil > Date.now() ? state.cooldownUntil : null,
+    pause: readPause(),
     llmReady: llm.llmReady(),
     llmUsage: llm.usageView(),
     hasKey: !!readSecrets().llmApiKey,
@@ -221,6 +223,13 @@ const routes = {
       if (typeof v === 'string' && v.trim()) writeSecrets({ [k]: v.trim() });
     }
     const before = readConfig();
+    // 她的窗：城市名变了就查一下经纬度；清空就不看天了
+    if (patch.sky && typeof patch.sky.place === 'string') {
+      const place = patch.sky.place.trim();
+      if (!place) Object.assign(patch.sky, { place: '', label: '', lat: null, lon: null });
+      else if (place !== before.sky.place || !Number.isFinite(before.sky.lat)) Object.assign(patch.sky, { place, ...(await sky.geocode(place)) });
+      else Object.assign(patch.sky, { lat: before.sky.lat, lon: before.sky.lon, label: before.sky.label });
+    }
     const cfg = writeConfig(patch);
     if (JSON.stringify(before.windows) !== JSON.stringify(cfg.windows) || before.windowChance !== cfg.windowChance) auto.replanToday();
     if (before.enabled !== cfg.enabled) logAction({ kind: 'autopilot', detail: cfg.enabled ? '打开了自动养号' : '关掉了自动养号' });
@@ -237,6 +246,7 @@ const routes = {
     return autopilotView();
   },
   'POST /api/autopilot/stop': async () => { auto.stopSession(); return { ok: true }; },
+  'POST /api/pause/clear': async () => { clearPause({ source: 'panel' }); return autopilotView(); },
   'POST /api/autopilot/clear-cooldown': async () => {
     const s = readState(); s.cooldownUntil = null; writeState(s);
     logAction({ kind: 'autopilot', detail: '手动解除了风控冷却' });
@@ -430,7 +440,7 @@ const routes = {
   },
 
   // 她的内心
-  'GET /api/mind': async () => mind.dayView(),
+  'GET /api/mind': async () => mind.dayViewWithSky(),
   // 她的记忆流：记错了的可以删
   'POST /api/memory/delete': async (_q, b) => ({ ok: memory.remove(String(b.id || '')), ...memory.memoryView(15) }),
   'POST /api/memory/update': async (_q, b) => {

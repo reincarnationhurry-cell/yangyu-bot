@@ -13,6 +13,7 @@
  *  3. 刷完（afterSession）：更新心情、着迷的东西、兴趣，写一句第一人称见闻进 DSH 记忆
  *     —— QQ 里的她就知道自己刷了什么；特别想分享的，号主刚好在线就主动说一句。
  *  4. 每晚（reflect）：把当天的独白提炼成「最近的我」，慢慢长出自己的样子，留历史可回看。
+ *  刷之前、刷完、睡前都看一眼窗外（sky.mjs）：天黑没黑、什么月亮、下没下雨，心情和想看的跟着天走。
  *
  * 状态在 data/mind.json（人能直接读）。没配模型时这些全部跳过，自动养号照旧按概率走。
  */
@@ -23,6 +24,7 @@ import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
 import * as memory from './memory.mjs';
 import * as lingo from './lingo.mjs';
+import * as sky from './sky.mjs';
 import { ROOT, DATA, localDate, logAction, readConfig, readActions, nowIso } from './store.mjs';
 
 const FILE = join(DATA, 'mind.json');
@@ -73,6 +75,9 @@ export function stateText(m = readMind()) {
 
 const { fence } = llm;
 
+/** 窗外：查天气失败也别耽误刷 */
+const skyLine = () => sky.skyText().catch(() => `现在是 ${new Date().getHours()} 点。`);
+
 const ask = async (system, user, maxTokens = 500, opts = {}) =>
   llm.looseJson(await llm.chat([{ role: 'system', content: `${llm.PERSONA}\n${system}` }, { role: 'user', content: user }], { maxTokens, tag: 'mind', ...opts }));
 
@@ -94,7 +99,7 @@ export async function planSession() {
       `${stateText(m)}
 最近看过：${recent || '（还没有）'}
 ${past ? `你想起以前的事：\n${past}\n` : ''}你感兴趣过的方向：${allInterests().join('、')}
-现在是 ${new Date().getHours()} 点。
+${await skyLine()}
 
 想想这会儿想看点什么：可以接着最近着迷的，也可以突然想换换口味。输出：
 {"mood":"现在的心情，10字内","intent":"一句话，这会儿想看什么、为什么（像自言自语，30字内）","keywords":["想搜的词，0~2个；只想随便刷首页就给空数组"]}`,
@@ -222,6 +227,8 @@ ${stateText(m)}
 这一轮看了：
 ${list}
 
+${await skyLine()}（天气、天黑没黑可以影响心情，但别硬扯）
+
 你自己长出来的兴趣：${m.interests.map((x) => x.kw).join('、') || '（还没有）'}
 
 输出（按这个顺序）：
@@ -304,6 +311,7 @@ async function reflect(m, today, cfg) {
       `以前的你是这样描述自己的：${m.self || '（还没写过）'}
 今天的状态：
 ${stateText(m)}
+${await skyLine()}
 今天刷B站时心里想过的：
 ${thoughts.slice(-20).join('\n')}
 
@@ -357,4 +365,9 @@ export function dayView() {
     (a.ok && a.source === 'auto' && (a.kind === 'join' || (a.kind === 'reply_comment' && a.meta?.auto))))
     .map((a) => ({ ts: a.ts, kind: a.kind, detail: a.detail }));
   return { mind: m, thoughts, moments, memory: memory.memoryView(15), lingo: lingo.readLingo().words, llm: llm.llmReady(), enabled: readConfig().mind.enabled };
+}
+
+/** 面板「她的一天」顶上那行窗外 */
+export async function dayViewWithSky() {
+  return { ...dayView(), sky: await skyLine() };
 }

@@ -14,7 +14,7 @@
 import { readFileSync, existsSync, writeFileSync, renameSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { readConfig, readSecrets, localDate, nowIso, logAction, DATA } from './store.mjs';
+import { readConfig, readSecrets, localDate, nowIso, logAction, DATA, readPause } from './store.mjs';
 import * as llm from './llm.mjs';
 
 const DSH_CHANNELS = join(homedir(), '.dsh', 'dsh-im-connect', 'channels.json');
@@ -160,6 +160,12 @@ export async function notifyReview(r) {
   if (!cfg.enabled || !cfg.kinds?.[r.kind]) return { sent: false, why: 'off' };
   if (quiet(cfg)) return { sent: false, why: 'quiet' };
   const st = readState();
+  // 号主叫停了：先排着，等他说好了、再开口时一起补上
+  if (readPause()) {
+    st.pending = [...(st.pending || []).filter((p) => p.review !== r.id), { review: r.id, ts: Date.now() }];
+    writeState(st);
+    return { sent: false, why: 'paused' };
+  }
   const today = localDate();
   if ((st.sent?.[today] || 0) >= cfg.dailyMax) return { sent: false, why: 'cap' };
 
@@ -223,6 +229,7 @@ export async function reportTask(task, { ok, note, watched = [] }) {
 export async function impulse(text) {
   const cfg = readConfig().notify;
   if (quiet(cfg)) return { sent: false, why: 'quiet' };
+  if (readPause()) return { sent: false, why: 'paused' };
   if (!lastOwnerMessage()?.fresh) return { sent: false, why: 'window' };
   try {
     await rawSend(text);
@@ -284,7 +291,7 @@ export async function flushPending(readReview) {
   }
 
   const reviews = ready.filter((p) => p.review);
-  if (!reviews.length) return;
+  if (!reviews.length || readPause()) return;
   const cfg = readConfig().notify;
   if (!cfg.enabled || quiet(cfg)) return;
   if ((st.sent?.[localDate()] || 0) >= cfg.dailyMax) return;

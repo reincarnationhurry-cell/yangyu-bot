@@ -110,7 +110,7 @@ const KIND = {
   comment: ['💬', '评论'], reply_comment: ['↩️', '回复评论'], dm_send: ['✉️', '私信'], search: ['🔍', '搜索'],
   feed: ['🏠', '刷推荐'], hot: ['🔥', '看热门'], task: ['📋', '派任务'], task_done: ['✅', '完成任务'],
   session_start: ['🐟', '开始刷'], session_end: ['🏁', '刷完了'], draft: ['📝', '起草'], diary: ['📔', '发日记'],
-  cooldown: ['🧊', '风控冷却'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
+  cooldown: ['🧊', '风控冷却'], pause: ['⏸', '号主叫停'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
   login: ['🔑', '登录'], notify: ['📮', 'QQ 提醒'], favorite: ['⭐', '收藏'], vip_new: ['🌟', '特别关注更新'], dyn_like: ['👍', '动态点赞'], vip: ['🌟', '特别关注'], follow: ['➕', '关注'],
   mind: ['💭', '心里想'], dig: ['🕳️', '顺藤摸瓜'],
   join: ['🗨️', '评论区搭话'], social: ['📬', '看回复'], reply_like: ['👍', '评论点赞'],
@@ -285,6 +285,7 @@ async function renderDay(el) {
     ...d.moments.filter((x) => x.kind !== 'dig').map((x) => ({ ts: x.ts, html: esc(x.detail) }))].sort((a, b) => (a.ts < b.ts ? -1 : 1));
   const last = m.selfHistory[m.selfHistory.length - 1];
   el.innerHTML = `<div class="card-h"><h2>🐟 她的一天</h2><span class="small muted">${m.updatedAt ? '更新于 ' + hm(m.updatedAt) : ''}</span></div>
+    ${d.sky ? `<div class="small muted" style="margin-bottom:8px">🪟 ${esc(d.sky)}</div>` : ''}
     <div class="mind-state">${state || '<span class="muted">还没刷过，心里空空的</span>'}</div>${grown}
     ${lines.length ? `<ul class="tl compact" style="margin-top:10px">${lines.map((l) => `<li ${l.bvid ? `data-bvid="${esc(l.bvid)}" style="cursor:pointer"` : ''}><div class="time num">${hm(l.ts)}</div><div class="ico">•</div><div class="body">${l.html}</div></li>`).join('')}</ul>` : '<div class="empty">今天还没有心里话</div>'}
     ${m.self ? `<details style="margin-top:10px"><summary class="small">最近的她${last?.changed ? ` · ${esc(last.date)}：${esc(last.changed)}` : ''}</summary><p class="small">${esc(m.self)}</p>
@@ -396,10 +397,10 @@ function renderApCard(el, ap) {
     ${liveHtml}
     <div class="dial" style="margin-top:${live.running ? 12 : 0}px">${dial}</div>
     <div class="row wrap small" style="justify-content:space-between">
-      <span class="muted">${ap.cooldownUntil ? `🧊 风控冷却到 ${hm(ap.cooldownUntil)}` : !c.enabled ? '打开后，会在蓝色的时辰里随机挑时间去刷' : next ? `下一轮：${next.label.slice(0, 2)} ${hm(next.at)}` : '今天的计划都跑完了'}
+      <span class="muted">${ap.pause ? `⏸ 号主叫停了${ap.pause.reason ? `（${esc(ap.pause.reason)}）` : ''}，${ap.pause.untilResume ? `等他说好了（最晚 ${hm(ap.pause.until)}）` : `到 ${hm(ap.pause.until)}`}` : ap.cooldownUntil ? `🧊 风控冷却到 ${hm(ap.cooldownUntil)}` : !c.enabled ? '打开后，会在蓝色的时辰里随机挑时间去刷' : next ? `下一轮：${next.label.slice(0, 2)} ${hm(next.at)}` : '今天的计划都跑完了'}
       ${ap.lastRun ? ` · 上一轮 ${ago(ap.lastRun.at)}` : ''}
       ${(ap.blocks || []).length ? `<br>⏸ 暂停中：${ap.blocks.map((b) => `${esc(b.name)}（到 ${new Date(b.until).getMonth() + 1}/${new Date(b.until).getDate()} ${hm(b.until)}）`).join('、')}` : ''}</span>
-      <span class="row">${ap.cooldownUntil ? '<button class="btn sm" id="apCool">解除冷却</button>' : ''}
+      <span class="row">${ap.pause ? '<button class="btn sm" id="apResume">恢复</button>' : ''}${ap.cooldownUntil ? '<button class="btn sm" id="apCool">解除冷却</button>' : ''}
         <button class="btn sm" ${live.running ? 'disabled' : ''} id="apRun">现在刷一轮</button>
         <a class="btn sm ghost" href="#/autopilot">设置</a></span>
     </div>`;
@@ -414,6 +415,8 @@ function renderApCard(el, ap) {
   if (stop) stop.onclick = () => busy(stop, async () => { await api('/api/autopilot/stop', {}); toast('已叫停，这个视频看完当前心跳就停'); });
   const cool = $('#apCool', el);
   if (cool) cool.onclick = () => busy(cool, async () => { await api('/api/autopilot/clear-cooldown', {}); route(); });
+  const resume = $('#apResume', el);
+  if (resume) resume.onclick = () => busy(resume, async () => { await api('/api/pause/clear', {}); toast('她接着过自己的日子了'); route(); });
 }
 
 let liveTimer = null;
@@ -595,6 +598,15 @@ async function pageAutopilot(main) {
           ${num('comment.chance', '看完后想评论的概率 %', { pct: 1, max: 100 })}
           ${num('comment.dailyMax', '每天最多评论', { max: 20 })}
           ${tog('comment.review', 'AI 评论先给我审', '强烈建议开着')}
+        </div>
+      </div>
+      <div class="cfg-sec">
+        <h3>🪟 她的窗</h3>
+        <p>给她开一扇窗：此刻外面天黑没黑、太阳几点落的、今晚什么月亮、下没下雨。日照和月相按经纬度现算，天气一小时查一次（Open-Meteo，免 Key）。
+        她刷之前想看什么、刷完心情怎么变、睡前反思都会看一眼窗外。不填地点就只知道几点。</p>
+        <div class="cfg-grid">
+          ${tog('sky.enabled', '让她看窗外')}
+          <div><label class="f">住在哪个城市</label><input data-path="sky.place" value="${esc(c.sky.place || '')}" placeholder="比如：深圳" autocomplete="off"><div class="hint">${Number.isFinite(c.sky.lat) ? `已定位：${esc(c.sky.label || c.sky.place)}（${c.sky.lat}, ${c.sky.lon}）` : '保存时会查成经纬度；天气服务只会收到城市名和经纬度'}</div></div>
         </div>
       </div>
       <div class="cfg-sec">

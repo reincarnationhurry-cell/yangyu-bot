@@ -20,6 +20,8 @@ export const FILES = {
   secrets: join(DATA, 'secrets.json'),
   blocks: join(DATA, 'blocks.json'),
   vip: join(DATA, 'vip.json'),
+  pause: join(DATA, 'pause.json'),
+  sky: join(DATA, 'sky.json'),
   diary: join(ROOT, 'diary', 'data', 'entries.jsonl'),
 };
 
@@ -166,6 +168,8 @@ export const DEFAULT_CONFIG = {
     reflectHour: 22, // 几点以后做当天的反思
     subtitles: true, // 认真看了的视频读一下字幕（CC 或 B站 AI 字幕），独白照着她真看到的内容说
   },
+  // 她的窗（sky.mjs）：此刻真的天 —— 日照、月相、天气，喂给她的内心。place 填城市名，保存时查成经纬度
+  sky: { enabled: true, place: '', label: '', lat: null, lon: null },
   like: { chance: 0.35, dailyMax: 15 },
   share: { daily: true },
   coin: { enabled: false, dailyMax: 1 },
@@ -267,6 +271,29 @@ export function readState() {
   return readJson(FILES.state, { plans: {}, cooldownUntil: null, seen: {}, lastRun: null });
 }
 export function writeState(s) { writeJson(FILES.state, s); }
+
+// ─── 号主叫停 ──────────────────────────────────────────────
+// 号主在 QQ 里说「我打游戏了」「开会呢别吵」，她就把手上的活停了 —— 不是降优先级，是停：
+// 不去刷、不看回复、不主动找他。他说「好了」才恢复；没说就照常，不用自作聪明一直让路。
+// 忘了说也最多停 PAUSE_MAX_HOURS，免得她一直干坐着。号主亲口派的活不受影响。
+export const PAUSE_MAX_HOURS = 24;
+export function readPause(now = Date.now()) {
+  const p = readJson(FILES.pause, null);
+  return p?.until > now ? p : null;
+}
+export function setPause({ reason = '', hours, source = 'bot' } = {}, now = Date.now()) {
+  const h = Number(hours) > 0 ? Math.min(Number(hours), PAUSE_MAX_HOURS) : 0;
+  const p = { at: new Date(now).toISOString(), until: now + (h || PAUSE_MAX_HOURS) * 3600_000, reason: String(reason).trim().slice(0, 40), untilResume: !h };
+  writeJson(FILES.pause, p);
+  logAction({ kind: 'pause', source, detail: `⏸ 号主${p.reason ? `「${p.reason}」` : '叫停了'}，手上的活先停${h ? ` ${h} 小时` : '，等他说好了再动'}` });
+  return p;
+}
+export function clearPause({ source = 'bot' } = {}) {
+  const p = readPause();
+  writeJson(FILES.pause, {});
+  if (p) logAction({ kind: 'pause', source, detail: '▶️ 号主说好了，接着过自己的日子' });
+  return p;
+}
 
 // ─── 动作熔断 ──────────────────────────────────────────────
 // 点赞、分享、收藏这类写接口一旦被 B站 拒绝（比如 -403「账号异常」），

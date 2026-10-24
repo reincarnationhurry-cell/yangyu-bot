@@ -108,6 +108,17 @@ export class OneBot extends EventEmitter {
   }
 }
 
+/** 消息里的图片段（市场表情 mface 不算，那个有文字说明） */
+export function imageSegments(ev) {
+  if (!Array.isArray(ev.message)) {
+    return [...String(ev.message || '').matchAll(/\[CQ:image,([^\]]*)\]/g)].map((m) => {
+      const kv = Object.fromEntries(m[1].split(',').map((x) => [x.slice(0, x.indexOf('=')), x.slice(x.indexOf('=') + 1).replace(/&amp;/g, '&').replace(/&#44;/g, ',')]));
+      return { url: kv.url, file: kv.file };
+    });
+  }
+  return ev.message.filter((s) => s.type === 'image' && !(s.data?.summary && s.data.summary !== '[图片]')).map((s) => ({ url: s.data?.url, file: s.data?.file }));
+}
+
 // ─── 消息段 ────────────────────────────────────────────────
 export const seg = {
   text: (text) => ({ type: 'text', data: { text } }),

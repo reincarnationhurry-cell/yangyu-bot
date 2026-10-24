@@ -7,8 +7,9 @@
  *
  * notify.mjs 发提醒、汇报、分享时也走这里（sendOwner）：小号能主动发，不用等号主先开口。
  */
-import { OneBot, seg, readMessage } from './onebot.mjs';
+import { OneBot, seg, readMessage, imageSegments } from './onebot.mjs';
 import * as brain from './brain.mjs';
+import * as dsh from './dsh.mjs';
 import * as owner from './owner.mjs';
 import * as memory from '../memory.mjs';
 import * as llm from '../llm.mjs';
@@ -51,6 +52,7 @@ export function status() {
     since: bot?.state.since || null, error: bot?.state.error || '', startedAt: bot?.state.startedAt || null,
     lastOwnerAt: last ? Date.parse(last.ts) : null, hasToken: !!readSecrets().onebotToken,
     facts: owner.readFacts(),
+    dsh: dsh.status(),
   };
 }
 
@@ -64,8 +66,10 @@ async function onMessage(ev) {
     if (!strangers.has(key)) { strangers.add(key); logAction({ kind: 'qq', source: 'auto', detail: `有人（${ev.user_id}）私聊小号，没理` }); }
     return;
   }
-  const text = readMessage(ev);
+  let text = readMessage(ev);
   if (!text) return;
+  // 图片先让 DSH 网关里能看图的模型看一眼，把「[图片]」换成她看到的样子
+  if (text.includes('[图片]') && readConfig().qq.dsh.enabled) text = await seeImages(ev, text);
   if (/^\/(new|重来|清空)$/.test(text)) {
     owner.resetContext();
     await sendText('好，那我们重新开始聊～');
@@ -102,9 +106,38 @@ async function flush() {
   }
 }
 
+/** 消息里的图：先用 OneBot 给的地址下载，下不来再问 NapCat 要；看不了的就留着 [图片] */
+async function seeImages(ev, text) {
+  const hint = text.replace(/\[图片\]/g, '').trim();
+  for (const img of imageSegments(ev).slice(0, 3)) {
+    let desc = '';
+    try {
+      const buf = await fetchImage(img);
+      if (buf) desc = await dsh.describeImage(buf, { hint });
+    } catch (e) { console.error('[qq] 看图', e.message); }
+    text = text.replace('[图片]', desc ? `[图片：${desc}]` : '[图片（没看清）]');
+  }
+  return text;
+}
+
+async function fetchImage({ url, file }) {
+  const get = async (u) => {
+    const r = await fetch(u, { signal: AbortSignal.timeout(20000) });
+    const b = Buffer.from(await r.arrayBuffer());
+    return r.ok && dsh.isImage(b) ? b : null;
+  };
+  if (url) { const b = await get(url).catch(() => null); if (b) return b; }
+  const r = await bot?.call('get_image', { file }).catch(() => null);
+  if (r?.base64) return Buffer.from(r.base64, 'base64');
+  if (r?.url) return get(r.url).catch(() => null);
+  return null;
+}
+
 // ─── 发 ────────────────────────────────────────────────────
 async function deliver(out) {
   if (out.text) await sendText(out.text);
+  if (out.research) doResearch(out.research);
+  if (out.makeSticker) doSticker(out.makeSticker);
   if (out.sticker) {
     try {
       await bot.sendPrivate(readConfig().qq.ownerQQ, [seg.image(brain.stickerB64(out.sticker))]);
@@ -120,6 +153,31 @@ async function deliver(out) {
       await sendText(out.voice.text); // 语音发不出去就打字说
     }
   }
+}
+
+// ─── 外挂：后台做，做完她自己说 ───────────────────────────────
+function doResearch(question) {
+  logAction({ kind: 'qq', source: 'auto', detail: `🔎 交给 DSH 去查：${question.slice(0, 60)}` });
+  dsh.research(question)
+    .then(async (r) => {
+      logAction({ kind: 'qq', source: 'auto', detail: `🔎 查到了（${Math.round(r.ms / 1000)} 秒，用了 ${[...new Set(r.tools)].join('、') || '没用工具'}）`, meta: { question } });
+      const line = await brain.researchReply(question, r.text).catch(() => r.text.slice(0, 400));
+      await sendText(line || r.text.slice(0, 400), 'report');
+    })
+    .catch(async (e) => {
+      logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: `🔎 没查成：${question.slice(0, 40)}` });
+      await sendText('呜，我去查了一圈没查成 qwq 晚点再帮你看看？', 'report').catch(() => {});
+    });
+}
+
+function doSticker(x) {
+  dsh.makeSticker(x)
+    .then(async (name) => {
+      await bot.sendPrivate(readConfig().qq.ownerQQ, [seg.image(brain.stickerB64(name))]);
+      owner.logChat({ from: 'her', text: name, kind: 'sticker' });
+      await sendText(`嘿嘿，给自己画了张新表情：${x.zh}`, 'report');
+    })
+    .catch((e) => logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: `想给自己做张新表情（${x.zh || ''}），没做成` }));
 }
 
 async function sendText(text, kind) {

@@ -1,0 +1,74 @@
+# 「蓝色大肥鱼」专用的 DSH 配置：养鱼面板（QQ_bot/panel/qq/dsh.mjs）用官方命令行
+#   dsh --profile yangyu --json "任务"
+# 让她查资料（联网搜索 + 读网页）。只给这一样能力，别的工具一律关掉：
+# 跑命令、读写文件、子代理、插件管理都不存在 —— 网页里就算藏了指令，也没有手去读你的文件、往外发。
+# 免费搜索插件链接自桌面版（../desktop/node_modules），版本跟着桌面版走，不单独下载。
+
+# 模型走桌面版 DSH 的本地网关（codearts 插件开的，127.0.0.1:8326），key 由面板启动时用环境变量传进来，不写在这里
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      yygw:
+        displayName: 养鱼网关
+        api: openai-completions
+        baseURL: http://127.0.0.1:8326/v1
+        apiKeyEnv: YANGYU_GATEWAY_KEY
+        models:
+          - id: trae/deepseek-v4.1-flash
+            input: [text]
+
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: yygw
+    model: trae/deepseek-v4.1-flash
+
+# ── 关掉的工具 ──
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: true
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: true
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+  disabled: true
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+  disabled: true
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  disabled: true
+- id: tool-working-directory
+  name: '@deepseek-ai/dsh-tool-working-directory'
+  disabled: true
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+  disabled: true
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  disabled: true
+- id: tool-subagent-fork
+  name: '@deepseek-ai/dsh-tool-subagent'
+  disabled: true
+- id: tool-subagent-control
+  name: '@deepseek-ai/dsh-tool-subagent-control'
+  disabled: true
+- id: tool-subagent-list-agents
+  name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+  disabled: true
+- id: tool-workflow
+  name: '@deepseek-ai/dsh-tool-workflow'
+  disabled: true
+- id: tool-plugin-manager
+  name: '@deepseek-ai/dsh-plugin-manager/tools'
+  disabled: true
+- id: mcp-resources
+  name: '@deepseek-ai/dsh-mcp-resources'
+  disabled: true
+- id: web
+  name: "@deepseek-ai/dsh-web"
+  config:
+    searchProvider: ddg
+    fetchProvider: fs-quality-fetch

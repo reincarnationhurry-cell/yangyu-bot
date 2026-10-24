@@ -238,6 +238,13 @@ export const DEFAULT_CONFIG = {
     silentHours: 4, // 你多久没说话才算「隔了很久」
     activeStart: 9, // 只在这段时间里主动找（点）
     activeEnd: 22,
+    // 外挂（qq/dsh.mjs）：查资料交给她专用的 DSH 配置，看图、做表情包走 DSH 本地网关里的模型
+    dsh: {
+      enabled: true,
+      profile: 'yangyu', // ~/.dsh/profiles/yangyu：只留联网搜索，其他工具都关掉
+      visionModel: 'openai-codex/gpt-5.6-luna', // 能看图的模型
+      imageModel: 'modelscope/Qwen/Qwen-Image-Edit', // 改图模型（拿现有表情当底图改表情）
+    },
   },
   // 有东西要你审时，让她在 QQ 里主动叫你（QQ 官方机器人的单聊主动消息，平台有限额）
   notify: {

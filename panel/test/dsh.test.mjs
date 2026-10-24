@@ -122,7 +122,7 @@ test('modelscopeEdit：按官方文档的字段提交、轮询、取图', async 
   assert.equal(sub.method, 'POST');
   assert.equal(sub.headers.Authorization, 'Bearer ms-tk');
   assert.equal(sub.headers['X-ModelScope-Async-Mode'], 'true');
-  assert.deepEqual(sub.body, { model: 'Qwen/Qwen-Image-Edit', prompt: 'yawn', image_url: ['data:image/png;base64,AAA'] });
+  assert.deepEqual(sub.body, { model: 'Qwen/Qwen-Image-Edit', prompt: 'yawn', image_url: ['data:image/png;base64,AAA'], size: '1024x1024' });
   assert.equal(poll.url, 'https://api-inference.modelscope.cn/v1/tasks/t-1');
   assert.equal(poll.headers['X-ModelScope-Task-Type'], 'image_generation');
   assert.equal(ms.seen.filter((x) => x.url.includes('/tasks/')).length, 3, '没做好就接着查');
@@ -156,6 +156,17 @@ test('makeSticker：做好的图存成 512×512，写进 INDEX.md 的表格，�
   await assert.rejects(d2.makeSticker({ en: 'cry', zh: '哭', look: '哭', edit: async () => PNG }), /今天已经做过/);
   delete process.env.YANGYU_STICKERS;
   rmSync(dir, { recursive: true, force: true });
+});
+
+test('toSquarePng：竖图补白成正方形再缩，不拉伸', () => {
+  const tall = join(fake, 'tall.png');
+  const out = join(fake, 'sq.png');
+  writeFileSync(tall, PNG);
+  execFileSync('/usr/bin/sips', ['-z', '1280', '760', tall], { stdio: 'ignore' });
+  dsh.toSquarePng(tall, out);
+  const g = (f) => execFileSync('/usr/bin/sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', f], { encoding: 'utf-8' });
+  assert.match(g(tall), /pixelWidth: 760[\s\S]*pixelHeight: 1280/);
+  assert.match(g(out), /pixelWidth: 512[\s\S]*pixelHeight: 512/);
 });
 
 test('addIndexRow：插到表格最后一行后面，不是文件末尾', () => {

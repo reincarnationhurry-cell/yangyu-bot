@@ -140,15 +140,16 @@ const MS_BASE = 'https://api-inference.modelscope.cn/';
 /**
  * 提交一个改图任务，等它做完，返回图片的字节。
  * image：底图的 data URL（官方文档支持 base64 输入，image_url 传数组）。
- * 每 5 秒查一次，最多等 timeoutMs。
+ * 每 5 秒查一次，最多等 timeoutMs（免费额度下实测要三四分钟）。
  */
-export async function modelscopeEdit({ prompt, image, model, token, timeoutMs = 4 * 60_000, pollMs = 5000, fetchFn = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+export async function modelscopeEdit({ prompt, image, model, token, size = '1024x1024', timeoutMs = 8 * 60_000, pollMs = 5000, fetchFn = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   if (!token) throw new Error('还没填 ModelScope 的访问令牌（面板「QQ 连接」里填）');
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const sub = await fetchFn(`${MS_BASE}v1/images/generations`, {
     method: 'POST',
     headers: { ...headers, 'X-ModelScope-Async-Mode': 'true' },
-    body: JSON.stringify({ model, prompt: String(prompt).slice(0, 1900), image_url: [image] }),
+    // size：要正方形（不给的话它按自己的比例出，实测出过 760×1280 的竖图）
+    body: JSON.stringify({ model, prompt: String(prompt).slice(0, 1900), image_url: [image], ...(size ? { size } : {}) }),
     signal: AbortSignal.timeout(30000),
   });
   const sj = await sub.json().catch(() => ({}));
@@ -204,14 +205,29 @@ export async function makeSticker({ en, zh, look, lookEn = '', base = 'happy_开
   const tmp = join(STICKERS, `.${name}.tmp`);
   writeFileSync(tmp, buf);
   try {
-    // 统一成 512×512 PNG，跟原来那 12 张一样
-    execFileSync('/usr/bin/sips', ['-s', 'format', 'png', '-z', '512', '512', tmp, '--out', file], { stdio: 'ignore' });
+    toSquarePng(tmp, file);
   } finally {
     rmSync(tmp, { force: true });
   }
   addIndexRow(`| \`${name}.png\` | ${zh} | ${String(when || look).replace(/\|/g, '／').slice(0, 40)} |`);
   logAction({ kind: 'qq', source: 'auto', detail: `给自己做了一张新表情：${zh}（${name}）` });
   return name;
+}
+
+/**
+ * 统一成 512×512 PNG，跟原来那 12 张一样。不是正方形的先在短边两侧补白再缩，不拉伸变形。
+ */
+export function toSquarePng(src, out) {
+  const info = execFileSync('/usr/bin/sips', ['-g', 'pixelWidth', '-g', 'pixelHeight', src], { encoding: 'utf-8' });
+  const w = Number(info.match(/pixelWidth: (\d+)/)?.[1]);
+  const h = Number(info.match(/pixelHeight: (\d+)/)?.[1]);
+  const side = Math.max(w, h);
+  if (w && h && w !== h) {
+    execFileSync('/usr/bin/sips', ['-s', 'format', 'png', '--padToHeightWidth', String(side), String(side), '--padColor', 'FFFFFF', src, '--out', out], { stdio: 'ignore' });
+    execFileSync('/usr/bin/sips', ['-z', '512', '512', out], { stdio: 'ignore' });
+  } else {
+    execFileSync('/usr/bin/sips', ['-s', 'format', 'png', '-z', '512', '512', src, '--out', out], { stdio: 'ignore' });
+  }
 }
 
 /** 插到 INDEX.md「现有表情」表格的最后一行后面（表格后面还有提示词模板，不能直接追加到文件末尾） */

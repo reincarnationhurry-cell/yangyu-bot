@@ -110,7 +110,7 @@ const KIND = {
   comment: ['💬', '评论'], reply_comment: ['↩️', '回复评论'], dm_send: ['✉️', '私信'], search: ['🔍', '搜索'],
   feed: ['🏠', '刷推荐'], hot: ['🔥', '看热门'], task: ['📋', '派任务'], task_done: ['✅', '完成任务'],
   session_start: ['🐟', '开始刷'], session_end: ['🏁', '刷完了'], draft: ['📝', '起草'], diary: ['📔', '发日记'],
-  cooldown: ['🧊', '风控冷却'], pause: ['⏸', '号主叫停'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
+  cooldown: ['🧊', '风控冷却'], pause: ['⏸', '号主叫停'], health: ['🩺', 'QQ 接入'], error: ['⚠️', '出错'], wake: ['☀️', '醒来'], autopilot: ['⚙️', '设置'],
   login: ['🔑', '登录'], notify: ['📮', 'QQ 提醒'], favorite: ['⭐', '收藏'], vip_new: ['🌟', '特别关注更新'], dyn_like: ['👍', '动态点赞'], vip: ['🌟', '特别关注'], follow: ['➕', '关注'],
   mind: ['💭', '心里想'], dig: ['🕳️', '顺藤摸瓜'],
   join: ['🗨️', '评论区搭话'], social: ['📬', '看回复'], reply_like: ['👍', '评论点赞'],
@@ -162,6 +162,7 @@ async function loadOverview() {
   S.badges.review = S.ov.reviewPending || 0;
   const ap = S.ov.autopilot;
   renderLoginBanner(S.ov.account);
+  renderHealthBanner(S.ov.health);
   $('#footStatus').innerHTML = S.ov.account && !S.ov.account.loggedIn ? '<a href="#" id="footLogin" style="color:var(--red)">⚠️ 掉登录了 · 扫码</a>' : ap.live.running
     ? '<span class="pulse"></span> 她正在刷B站'
     : ap.config.enabled ? '自动养号 · 开' : '自动养号 · 关';
@@ -657,10 +658,10 @@ async function pageAutopilot(main) {
       </div>
       <div class="cfg-sec">
         <h3>养鱼日记</h3>
-        <p>在指定时辰那一轮刷完后，处理今天的日记（公开动态）。</p>
+        <p>每晚到点她自己写今天的日记（公开动态），从她当天心里想过的话往下写，不用你每天提醒。开着「先给我审」就进待审，你下次在 QQ 说话时她会问你；关掉就直接发。</p>
         <div class="cfg-grid">
           ${sel('diary.mode', '日记方式', [['off', '不写'], ['task', '交给 QQ 里的她写'], ['llm', 'AI 起草']])}
-          ${sel('diary.window', '在哪个时辰写', ap.shichen.map((s) => [s.key, s.label]))}
+          ${num('diary.hour', '每晚几点以后写', { min: 18, max: 23, hint: '今晚还有没刷完的时辰就等它刷完；23:30 后不等' })}
           ${tog('diary.review', 'AI 日记先给我审', '动态是公开的')}
         </div>
       </div>
@@ -836,6 +837,21 @@ function renderLoginBanner(acct) {
   $('button', el).onclick = () => openLogin();
   const f = $('#footLogin');
   if (f) f.onclick = (e) => { e.preventDefault(); openLogin(); };
+}
+
+// QQ 接入断了（DSH 升级后插件跟不上、网关没起来）：她在 QQ 里没法告诉你，只能挂在这儿
+function renderHealthBanner(h) {
+  let el = $('#healthBanner');
+  if (!h || h.ok) { el?.remove(); return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'healthBanner';
+    el.className = 'login-banner';
+    document.body.prepend(el);
+  }
+  el.innerHTML = h.problems.map((p) => `<span>⚠️ ${esc(p.text)}<br><span class="small" style="font-weight:400">${esc(p.fix)}</span></span>`).join('')
+    + ' <button class="btn sm">修好了，再查一次</button>';
+  $('button', el).onclick = (e) => busy(e.target, async () => { renderHealthBanner(await api('/api/health?fresh=1')); });
 }
 
 let loginTimer = null;

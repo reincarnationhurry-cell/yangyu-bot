@@ -33,7 +33,7 @@ test('叫停时不主动找他：冲动分享不发，待审提醒先排着', as
   assert.equal((await notify.impulse('快看这个')).why, 'paused');
   const r = store.addReview({ kind: 'comment', text: '想发的评论' });
   assert.equal((await notify.notifyReview(r)).why, 'paused');
-  assert.equal(notify.status().pending, 1, '排着，等他说好了再开口时补上');
+  assert.equal(notify.status().pending, 2, '分享揣着、待审排着，等他说好了再开口时补上');
   store.clearPause();
 });
 
@@ -44,4 +44,14 @@ test('pause.mjs CLI：停、看、恢复', () => {
   assert.match(run(), /没停/);
   assert.match(run('开会', '--hours', '2'), /停了，到/);
   run('off');
+});
+
+test('冲动分享：深夜也揣着，不会丢；只揣最新的一条', async () => {
+  store.writeConfig({ notify: { quietStart: 0, quietEnd: 24 } }); // 全天免打扰，结果不看现在几点、你刚有没有说话
+  const r = await notify.impulse('你看这个宇宙视频\nhttps://www.bilibili.com/video/BV1xx');
+  assert.equal(r.held, true);
+  assert.equal(r.why, 'quiet');
+  assert.equal(notify.status().pending, 2, '前面那条待审 + 这条揣着的（替掉了叫停时那条）');
+  await notify.impulse('又一个');
+  assert.equal(notify.status().pending, 2, '只揣最新的一条');
 });

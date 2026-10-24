@@ -21,6 +21,7 @@ import * as mind from './mind.mjs';
 import * as memory from './memory.mjs';
 import * as social from './social.mjs';
 import * as sky from './sky.mjs';
+import * as health from './health.mjs';
 import { openAsHer } from './browser.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
@@ -156,8 +157,10 @@ const routes = {
       tasksPending: readTasks().filter((t) => t.status === 'pending').length,
       reviewPending: readReview().filter((r) => r.status === 'pending').length,
       autopilot: autopilotView(),
+      health: health.status(),
     };
   },
+  'GET /api/health': async (q) => (q.get('fresh') ? health.check() : health.status()),
 
   // 扫码登录（掉登录时用）
   'POST /api/login/qr': async () => bili.qrLoginStart(),
@@ -499,4 +502,7 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`\n🐟 养鱼面板已启动：http://${HOST}:${PORT}\n`);
   auto.startScheduler();
+  // QQ 接入体检：DSH 自动升级后插件跟不上会静悄悄掉线，5 分钟看一眼
+  setTimeout(() => health.check(), 60_000);
+  setInterval(() => health.check(), 5 * 60_000);
 });

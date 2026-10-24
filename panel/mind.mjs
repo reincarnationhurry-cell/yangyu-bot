@@ -33,6 +33,9 @@ const MEMORY_DIR = join(homedir(), '.dsh', 'memory', 'workspaces', `--${ROOT.rep
 
 const EMPTY = {
   mood: '',
+  moodAt: null, // 心情是什么时候的（过几个小时就该变了）
+  moods: [], // 最近几次的心情 [{ mood, at }]，用来发现「老是一个样」
+  tone: null, // 今天的底色 { date, text }，每天随机换一个
   obsession: '', // 最近着迷的东西
   thought: '', // 一个没想完的念头
   goal: '', // 一个小目标
@@ -63,9 +66,50 @@ export function allInterests(cfg = readConfig()) {
   return [...new Set([...cfg.interests, ...readMind().interests.map((x) => x.kw)])];
 }
 
-export function stateText(m = readMind()) {
+// ─── 心情：别老是一个样 ─────────────────────────────────────
+// 以前心情原样带进下一轮，又一直看助眠视频，结果从早到晚都「困得眼皮打架」（2026-10-21~24 连着 9 次）。
+// 现在：心情带着「几个小时前」，过久了就只当参考；每天给一个随机的底色；连着几次犯困会提醒她换。
+const TONES = ['精神不错，想找点新鲜的', '有点懒，但好奇心还在', '心情挺好，想笑一笑', '有点闷，想看点燃的', '平平静静的', '好奇心旺盛，想学点什么', '有点小烦躁，想被治愈一下', '挺有干劲的', '有点想出去走走', '想听点音乐'];
+const SLEEPY = /困|睡|眼皮|迷糊|打盹/;
+
+/** 今天的底色：每天第一次问的时候抽一个 */
+export function dayTone(m = readMind(), today = localDate()) {
+  if (m.tone?.date === today) return m.tone.text;
+  const text = TONES[Math.floor(Math.random() * TONES.length)];
+  writeMind({ ...readMind(), tone: { date: today, text } });
+  return text;
+}
+
+/** 连着几次都在犯困（最容易卡住的一种） */
+export function moodStreak(moods = []) {
+  let n = 0;
+  for (let i = moods.length - 1; i >= 0 && SLEEPY.test(moods[i].mood); i--) n++;
+  return n;
+}
+
+export function setMood(m, mood) {
+  if (!mood) return m;
+  const at = nowIso();
+  return { ...m, mood, moodAt: at, moods: [...(m.moods || []), { mood, at }].slice(-8) };
+}
+
+/** 给模型看的心情提示：上次的心情多久以前、今天的底色、是不是卡住了 */
+export function moodHint(m, now = Date.now()) {
+  const hours = m.moodAt ? (now - Date.parse(m.moodAt)) / 3600_000 : null;
+  const h = new Date(now).getHours();
+  const streak = moodStreak(m.moods);
   return [
-    m.mood && `心情：${m.mood}`,
+    `今天的底色：${dayTone(m)}`,
+    hours !== null && hours >= 2 && `上次的心情是 ${Math.round(hours)} 小时前的，现在多半变了，按现在重新想`,
+    streak >= 2 && `你已经连着 ${streak} 次说自己困了${h >= 8 && h < 22 ? '，现在是白天，早该缓过来了' : ''}，换个状态吧`,
+    '心情跟着时间、天气、刚看的东西走；白天别老困，深夜才犯困',
+  ].filter(Boolean).join('；');
+}
+
+export function stateText(m = readMind()) {
+  const hours = m.moodAt ? Math.round((Date.now() - Date.parse(m.moodAt)) / 3600_000) : null;
+  return [
+    m.mood && `心情${hours ? `（${hours} 小时前）` : ''}：${m.mood}`,
     m.obsession && `最近着迷：${m.obsession}`,
     m.thought && `脑子里还转着的念头：${m.thought}`,
     m.goal && `给自己定的小目标：${m.goal}`,
@@ -87,12 +131,60 @@ const str = (v, max) => {
   return /^(还?没有|无|暂无|空|照抄|没变|none|null)$/i.test(t) ? '' : t;
 };
 
+// ─── 口味别太单一 ─────────────────────────────────────────
+// 她会自己长兴趣，但长着长着容易钻进一个口子（2026-10 那几天 87 个视频里 55 个是猫，长出来的 9 个兴趣全是猫的变体）。
+// 喜欢就让她喜欢，只是最近看得太满时提醒她换换口味：刷前给几个别的方向、搜词别再沾这个、一轮里最多看一个、别顺着往下挖。
+const STOP_BIGRAMS = new Set(['视频', '合集', '完整', '高清', '一下', '什么', '这个', '我们', '你们', '就是', '自己', '一个', '真的', '超级', '分钟', '小时', '第一', '中字', '版本', '全集']);
+// 换口味时给她的几个方向，她可以挑也可以自己想
+export const EXPLORE = ['科普', '历史冷知识', '音乐现场', '手工', '旅行vlog', '动画短片', '美食探店', '建筑', '电影解说', '乐器演奏', '自然纪录片', '游戏实况', '绘画过程', '脱口秀', '宇宙', '考古', '城市夜景', '做饭', '诗词', '运动集锦', '模型制作', '数学', '方言', '老歌'];
+
+const cjk = (t) => String(t || '').replace(/[^一-鿿]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+
+/**
+ * 最近看的是不是被一个主题占满了。候选主题：标题里的两字词 + 她兴趣词里的单字（「猫」「咪」这种）。
+ * 覆盖了 share 以上的标题就算满了，返回 { theme, n, of }；看得还少或者挺杂就返回 null。
+ */
+export function saturation(titles, { min = 8, share = 0.45, interests = [] } = {}) {
+  if (titles.length < min) return null;
+  const chars = new Set(interests.flatMap((k) => [...cjk(k).join('')]));
+  const count = new Map();
+  for (const t of titles) {
+    const seen = new Set();
+    for (const w of cjk(t)) {
+      for (let i = 0; i < w.length; i++) {
+        if (chars.has(w[i])) seen.add(w[i]);
+        const b = w.slice(i, i + 2);
+        if (b.length === 2 && !STOP_BIGRAMS.has(b)) seen.add(b);
+      }
+    }
+    for (const x of seen) count.set(x, (count.get(x) || 0) + 1);
+  }
+  // 覆盖最多的赢；一样多就要长的（「助眠」比「眠」好懂）
+  const [theme, n] = [...count].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0] || [];
+  return theme && n / titles.length >= share ? { theme, n, of: titles.length } : null;
+}
+
+export const onTheme = (text, theme) => !!theme && String(text || '').includes(theme);
+
+function recentSaturation(cfg = readConfig()) {
+  const titles = readActions().filter((a) => a.kind === 'watch' && a.ok).slice(-20).map((a) => a.title);
+  return saturation(titles, { interests: allInterests(cfg) });
+}
+
+/** 换口味时给她挑的几个方向：最近没搜过的，打乱取几个 */
+function exploreIdeas(n = 4) {
+  const searched = new Set(readActions().filter((a) => a.kind === 'search').slice(-40).map((a) => a.target));
+  return EXPLORE.filter((k) => !searched.has(k)).sort(() => Math.random() - 0.5).slice(0, n);
+}
+
 // ─── 1. 刷之前：今天想看什么 ─────────────────────────────────
 export async function planSession() {
   if (!mindOn()) return null;
   const m = readMind();
   const recent = readActions().filter((a) => a.kind === 'watch' && a.ok).slice(-12).map((a) => `《${fence(a.title, 40)}》`).join('、');
   const past = memory.recallText([m.obsession, m.goal, m.thought].join(' '), { k: 3 });
+  const sat = recentSaturation();
+  const ideas = sat ? exploreIdeas() : [];
   try {
     const j = await ask(
       '你要打开B站随便刷一会儿。只输出 JSON。',
@@ -100,20 +192,25 @@ export async function planSession() {
 最近看过：${recent || '（还没有）'}
 ${past ? `你想起以前的事：\n${past}\n` : ''}你感兴趣过的方向：${allInterests().join('、')}
 ${await skyLine()}
-
-想想这会儿想看点什么：可以接着最近着迷的，也可以突然想换换口味。输出：
+${moodHint(m)}
+${sat ? `\n你最近看的 ${sat.of} 个里有 ${sat.n} 个跟「${sat.theme}」有关，看得有点单调了。喜欢归喜欢，这次换换口味：搜词别再沾「${sat.theme}」，可以从这些里挑一个，也可以自己想个完全不一样的：${ideas.join('、')}。\n` : ''}
+想想这会儿想看点什么：可以接着最近着迷的，也可以突然想换换口味。心情会变的，别老是同一种。输出：
 {"mood":"现在的心情，10字内","intent":"一句话，这会儿想看什么、为什么（像自言自语，30字内）","keywords":["想搜的词，0~2个；只想随便刷首页就给空数组"]}`,
       300,
     );
     const plan = {
       intent: str(j.intent, 60),
-      keywords: (Array.isArray(j.keywords) ? j.keywords : []).map((k) => str(k, 20)).filter(Boolean).slice(0, 2),
+      keywords: (Array.isArray(j.keywords) ? j.keywords : []).map((k) => str(k, 20)).filter(Boolean).filter((k) => !onTheme(k, sat?.theme)).slice(0, 2),
+      avoid: sat?.theme || null,
     };
-    if (j.mood) writeMind({ ...readMind(), mood: str(j.mood, 20) });
+    // 满了还是只想搜它（被滤光了）：替她挑一个新方向
+    if (sat && !plan.keywords.length && ideas.length) plan.keywords = [ideas[0]];
+    if (sat) logAction({ kind: 'mind', source: 'auto', detail: `🔀 最近 ${sat.of} 个里 ${sat.n} 个是「${sat.theme}」，换换口味：${plan.keywords.join('、') || '随便刷刷首页'}`, meta: { avoid: sat.theme } });
+    if (str(j.mood, 20)) writeMind(setMood(readMind(), str(j.mood, 20)));
     if (plan.intent) logAction({ kind: 'mind', source: 'auto', detail: `💭 ${plan.intent}`, meta: { keywords: plan.keywords } });
     return plan;
   } catch {
-    return null;
+    return sat ? { intent: '', keywords: ideas.slice(0, 1), avoid: sat.theme } : null;
   }
 }
 
@@ -228,8 +325,9 @@ ${stateText(m)}
 ${list}
 
 ${await skyLine()}（天气、天黑没黑可以影响心情，但别硬扯）
+${moodHint(m)}
 
-你自己长出来的兴趣：${m.interests.map((x) => x.kw).join('、') || '（还没有）'}
+你自己长出来的兴趣：${m.interests.map((x) => x.kw).join('、') || '（还没有）'}（兴趣要杂一点，别都是同一类的变体）
 
 输出（按这个顺序）：
 {"memory":"第一人称一两句，记下这轮印象最深的（会成为你的记忆，60字内，提具体标题）",
@@ -248,10 +346,17 @@ ${await skyLine()}（天气、天黑没黑可以影响心情，但别硬扯）
   for (const kw of (Array.isArray(j.add) ? j.add : []).map((k) => str(k, 20)).filter(Boolean).slice(0, 2)) {
     if (!interests.some((x) => x.kw === kw) && !readConfig().interests.includes(kw)) interests.push({ kw, at: localDate() });
   }
+  // 同一个主题的兴趣最多留 3 个（旧的先出局），别长成一串变体；看得太满的时候也别再加这一类
+  const sat = recentSaturation();
+  if (sat) {
+    const themed = interests.filter((x) => onTheme(x.kw, sat.theme));
+    const fresh = themed.filter((x) => x.at === localDate());
+    const keep = new Set([...themed.filter((x) => x.at !== localDate()).slice(-3)]);
+    interests = interests.filter((x) => !onTheme(x.kw, sat.theme) || (keep.has(x) && !fresh.includes(x)));
+  }
   interests = interests.slice(-12);
   const next = {
-    ...readMind(),
-    mood: str(j.mood, 20) || m.mood,
+    ...setMood(readMind(), str(j.mood, 20)),
     obsession: str(j.obsession, 40) || m.obsession,
     thought: str(j.thought, 40) || m.thought,
     goal: str(j.goal, 40) || m.goal,
@@ -269,13 +374,13 @@ ${await skyLine()}（天气、天黑没黑可以影响心情，但别硬扯）
     if (cfg.memory) remember(`我（肥鱼）自己刷B站：${memoryText}`);
   }
 
-  // 冲动：特别想分享的，号主一小时内说过话才发（QQ 规定），每天最多一次
+  // 冲动：特别想分享的，每天最多一次。号主一小时内说过话就马上发（QQ 规定），不然揣着等他来
   const share = j.share || {};
   const pick = watched.find((w) => w.bvid === share.bvid);
   if (cfg.impulse && pick && str(share.line, 80) && m.impulseOn !== localDate() && (pick.score || 0) >= 4) {
     const text = `${str(share.line, 80)}\nhttps://www.bilibili.com/video/${pick.bvid}`;
     const r = await notify.impulse(text);
-    if (r.sent) writeMind({ ...readMind(), impulseOn: localDate() });
+    if (r.sent || r.held) writeMind({ ...readMind(), impulseOn: localDate() });
   }
 }
 

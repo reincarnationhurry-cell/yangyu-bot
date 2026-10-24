@@ -191,6 +191,7 @@ async function tick() {
     }
     return;
   }
+  if (!live.running) maybeNightlyDiary(cfg, now).catch((e) => console.error('[autopilot] 日记', e.message));
   if (!cfg.enabled || live.running || social.isBusy()) return;
 
   if (gap > 5 * 60_000) {
@@ -263,13 +264,15 @@ export function stopSession() {
 
 // ─── 挑视频 ────────────────────────────────────────────────
 // keywords：她这会儿自己想搜的（mind.planSession），有就先搜这个
-async function pickCandidates(cfg, state, keywords = []) {
+// avoid：最近看得太满的主题（mind.saturation），这一轮最多留一个
+async function pickCandidates(cfg, state, keywords = [], avoid = null) {
   const s = cfg.session;
   const tried = new Set();
   const out = [];
   const seen = state.seen || {};
   const queue = [...keywords];
-  const interests = mind.allInterests(cfg);
+  const all = mind.allInterests(cfg);
+  const interests = avoid ? all.filter((k) => !mind.onTheme(k, avoid)) : all;
   for (let i = 0; i < 3 && out.length < s.videosMax * 2; i++) {
     const src = queue.length ? 'interest' : weightedPick(s.sourceWeights);
     if (tried.has(src) && src !== 'interest') continue;
@@ -297,8 +300,11 @@ async function pickCandidates(cfg, state, keywords = []) {
     }
     await bili.sleep(rand(1500, 4000));
   }
-  // 打散，别总按接口顺序看
-  return out.sort(() => Math.random() - 0.5);
+  // 打散，别总按接口顺序看；看得太满的主题只留一个
+  out.sort(() => Math.random() - 0.5);
+  if (!avoid) return out;
+  let kept = 0;
+  return out.filter((v) => !mind.onTheme(v.title, avoid) || kept++ < 1);
 }
 
 function watchPlan(cfg, duration, { noSkip = false, vip = false } = {}) {
@@ -550,6 +556,7 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
 
     live.step = '挑视频';
     let pool;
+    let avoid = null; // 最近看得太满的主题，这一轮少碰
     let n;
     if (videos?.length) {
       pool = videos;
@@ -562,7 +569,8 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
       n = vipList.length;
     } else {
       const thinking = await mind.planSession();
-      const extra = await pickCandidates(cfg, state, thinking?.keywords);
+      avoid = thinking?.avoid || null;
+      const extra = await pickCandidates(cfg, state, thinking?.keywords, avoid);
       pool = [...vipList, ...extra.filter((x) => !vipList.some((v) => v.bvid === x.bvid))];
       n = vipList.length + Math.min(extra.length, randInt(cfg.session.videosMin, cfg.session.videosMax));
     }
@@ -694,7 +702,8 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
       if (c.vip) dropFromVipQueue(c.bvid, { countDone: true });
 
       // 顺藤摸瓜：看上头了，就顺着这个 UP 主 / 这个话题再看一个
-      if (canDig && feel?.dig && digs < cfg.mind.digMax && !signal.aborted) {
+      // 看得太满的主题就别顺着往下挖了
+      if (canDig && feel?.dig && digs < cfg.mind.digMax && !signal.aborted && !mind.onTheme(`${v.title} ${feel.kw || ''}`, avoid)) {
         const next = await digFrom(v, feel, state, pool).catch((e) => { if (e.risk) throw e; return null; });
         if (next) {
           digs++;
@@ -722,9 +731,6 @@ export async function runSession({ reason = '手动', slotKey, videos, vipOnly =
         logAction({ kind: 'share', source: SRC, target: lastWatched.bvid, title: lastWatched.title, detail: `分享了《${lastWatched.title}》` });
       }
     }
-
-    // 晚上那一轮顺便处理日记
-    if (!signal.aborted && slotKey && slotKey === cfg.diary.window) await maybeDiary(cfg);
 
     // 合并已看记录，顺手清掉 30 天前的
     const st = readState();
@@ -823,15 +829,38 @@ function diaryPublishedToday() {
   return readJsonl(FILES.diary).some((e) => e.type === 'published' && e.date === today);
 }
 
+/**
+ * 每晚到点（diary.hour）自己写日记，不用号主每天提醒；以前挂在亥时那一轮后面，
+ * 那一轮被随机跳过、或者号主先让她写了，就像「从来不会自己写」。
+ * 今晚还有没刷的时辰就等它刷完再写（23:30 以后不等了）；一天只试一次。
+ */
+async function maybeNightlyDiary(cfg, now = Date.now()) {
+  const d = new Date(now);
+  const today = localDate(d);
+  if (cfg.diary.mode === 'off' || d.getHours() < cfg.diary.hour) return;
+  const state = readState();
+  if (state.diaryOn === today) return;
+  const late = d.getHours() * 60 + d.getMinutes() >= 23 * 60 + 30;
+  const tonight = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 30).getTime();
+  if (!late && (state.plans[today] || []).some((x) => (x.status === 'pending' || x.status === 'running') && x.at < tonight)) return;
+  writeState({ ...state, diaryOn: today });
+  await maybeDiary(cfg);
+}
+
+/** 今天看过、心里有想法的那些（日记要写感受，不是片单） */
+function todayWatched(today = localDate()) {
+  return readActions()
+    .filter((a) => a.kind === 'watch' && a.ok && localDate(new Date(a.ts)) === today)
+    .map((a) => ({ title: a.title, owner: a.meta?.owner, thought: a.meta?.thought || '', heard: a.meta?.heard || '', score: a.meta?.score || 0 }));
+}
+
 async function maybeDiary(cfg) {
   if (cfg.diary.mode === 'off' || diaryPublishedToday()) return;
   const today = localDate();
   if (readReview().some((r) => r.kind === 'diary' && r.status === 'pending' && localDate(new Date(r.ts)) === today)) return;
   if (readTasks().some((t) => t.type === 'diary' && t.status === 'pending')) return;
 
-  const watched = readActions()
-    .filter((a) => a.kind === 'watch' && a.ok && localDate(new Date(a.ts)) === today)
-    .map((a) => ({ title: a.title, owner: a.meta?.owner }));
+  const watched = todayWatched(today);
   if (watched.length === 0) return;
 
   let mode = cfg.diary.mode;
@@ -840,12 +869,14 @@ async function maybeDiary(cfg) {
     addTask({ type: 'diary', source: SRC, note: '今天刷了不少，有想写的就写进养鱼日记发条动态；没想法就不发' });
     return;
   }
-  live.step = '写日记';
-  const text = await llm.draftDiary(watched).catch((e) => {
+  const text = await llm.draftDiary(watched, { self: mind.readMind() }).catch((e) => {
     logAction({ kind: 'error', source: SRC, ok: false, error: e.message, detail: 'AI 起草日记失败' });
     return null;
   });
-  if (!text) return;
+  if (!text) {
+    logAction({ kind: 'draft', source: SRC, detail: '翻了翻今天刷的，没什么想写的，今晚不发日记' });
+    return;
+  }
   if (cfg.diary.review) {
     addReview({ kind: 'diary', text, payload: { date: today } });
     logAction({ kind: 'draft', source: SRC, detail: '起草了今天的养鱼日记，等你审' });
@@ -907,12 +938,10 @@ const PRESETS = {
 async function diaryNow() {
   if (!llm.llmReady()) throw new Error('没配模型，写日记只能交给 QQ 里的她');
   const today = localDate();
-  const watched = readActions()
-    .filter((a) => a.kind === 'watch' && a.ok && localDate(new Date(a.ts)) === today)
-    .map((a) => ({ title: a.title, owner: a.meta?.owner }));
+  const watched = todayWatched(today);
   if (!watched.length) return '今天还没看过视频，没东西可写';
   live.step = '写日记';
-  const text = await llm.draftDiary(watched);
+  const text = await llm.draftDiary(watched, { self: mind.readMind() });
   if (!text) return '她看了看今天刷的，觉得没什么想写的';
   addReview({ kind: 'diary', text, payload: { date: today } });
   logAction({ kind: 'draft', source: SRC, detail: '起草了今天的养鱼日记，等你审' });

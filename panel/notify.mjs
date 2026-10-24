@@ -224,13 +224,22 @@ export async function reportTask(task, { ok, note, watched = [] }) {
 
 /**
  * 她刷到特别想给你看的东西，自己忍不住说一句（mind.mjs 决定什么时候想说）。
- * 不排队：过了回复窗口再补发就不是「刚刷到」了；深夜免打扰照样生效。
+ * QQ 不让机器人凭空开口，只能在你说话后一小时内回你。所以窗口开着就马上说；
+ * 关着（或者深夜、你叫停了）就先揣着，你下次开口时补上 —— 过了 IMPULSE_KEEP 就不是「刚刷到」了，算了。
  */
+const IMPULSE_KEEP = 12 * 3600_000;
 export async function impulse(text) {
   const cfg = readConfig().notify;
-  if (quiet(cfg)) return { sent: false, why: 'quiet' };
-  if (readPause()) return { sent: false, why: 'paused' };
-  if (!lastOwnerMessage()?.fresh) return { sent: false, why: 'window' };
+  const hold = (why) => {
+    const st = readState();
+    st.pending = [...(st.pending || []).filter((p) => !p.impulse), { impulse: true, text, ts: Date.now() }];
+    writeState(st);
+    logAction({ kind: 'notify', source: 'auto', detail: `想跟你说，先揣着等你来：${text.split('\n')[0]}`, meta: { impulse: true, held: why } });
+    return { sent: false, why, held: true };
+  };
+  if (quiet(cfg)) return hold('quiet');
+  if (readPause()) return hold('paused');
+  if (!lastOwnerMessage()?.fresh) return hold('window');
   try {
     await rawSend(text);
     const st = readState();
@@ -274,6 +283,23 @@ export async function flushPending(readReview) {
   // 只在你「排队之后」又说了话才补发 —— 那是新的回复窗口
   const ready = st.pending.filter((p) => last.at > p.ts);
   if (!ready.length) return;
+
+  // 她揣着想跟你说的：你一开口就补上（太久的就不说了；叫停了还是先忍着。你正在说话，就不算打扰，深夜也说）
+  const stale = st.pending.filter((p) => p.impulse && Date.now() - p.ts > IMPULSE_KEEP);
+  if (stale.length) { st.pending = st.pending.filter((p) => !stale.includes(p)); writeState(st); }
+  const held = ready.filter((p) => p.impulse && !stale.includes(p));
+  if (held.length && !readPause()) {
+    const text = held.map((p) => p.text).join('\n\n');
+    st.pending = st.pending.filter((p) => !held.includes(p));
+    try {
+      await rawSend(text);
+      st.log = [...(st.log || []), { ts: nowIso(), ok: true, impulse: true, text: text.slice(0, 60) }].slice(-30);
+      logAction({ kind: 'notify', source: 'auto', detail: `你一来就跟你说：${text.split('\n')[0]}`, meta: { impulse: true } });
+    } catch (e) {
+      st.log = [...(st.log || []), { ts: nowIso(), ok: false, impulse: true, error: e.message }].slice(-30);
+    }
+    writeState(st);
+  }
 
   // 活干完的汇报：是你交代的事，不看提醒开关和上限
   const reports = ready.filter((p) => p.task);

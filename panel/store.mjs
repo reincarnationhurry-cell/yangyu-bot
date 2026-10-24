@@ -200,7 +200,7 @@ export const DEFAULT_CONFIG = {
     // off / task / llm
     mode: 'task',
     review: true,
-    window: '亥',
+    hour: 22, // 每晚几点以后写（今晚还有没刷完的时辰就等它刷完）
   },
   llm: {
     baseUrl: 'https://api.deepseek.com',

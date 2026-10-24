@@ -204,8 +204,10 @@ ${context ? `相关内容：${fence(context, 200)}\n` : ''}对方说：${fence(m
 }
 
 /** 根据今天看过的视频写一篇养鱼日记（公开动态） */
-export async function draftDiary(watched) {
-  const list = watched.slice(0, 12).map((w) => `- 《${fence(w.title, 80)}》（${fence(w.owner || '某UP', 30)}）`).join('\n');
+export async function draftDiary(watched, { self = null } = {}) {
+  // 心里有想法的、喜欢的排前面；只给标题的那种日记写出来像片单
+  const rows = [...watched].sort((a, b) => (b.thought ? 1 : 0) - (a.thought ? 1 : 0) || (b.score || 0) - (a.score || 0)).slice(0, 12);
+  const list = rows.map((w) => `- 《${fence(w.title, 80)}》（${fence(w.owner || '某UP', 30)}）${w.heard ? `，里面 ${fence(w.heard, 60)}` : ''}${w.thought ? `。你当时心里想：${fence(w.thought, 80)}` : ''}`).join('\n');
   const out = await chat(
     [
       { role: 'system', content: `${PERSONA}\n\n${RULES}\n这是一条公开的B站动态，陌生人都能看到。` },
@@ -213,9 +215,11 @@ export async function draftDiary(watched) {
         role: 'user',
         content: `今天你在B站刷到了这些视频：
 ${list}
+${self?.mood ? `\n你现在的心情：${fence(self.mood, 20)}` : ''}${self?.self ? `\n最近的你：${fence(self.self, 200)}` : ''}
 
-挑一两个真正让你有感觉的，写一条像朋友圈一样的小日记（50~220 字）。
-不要列清单，不要写"今天看了X个视频""点了N个赞"，不要写成周报。
+挑一两个真正让你有感觉的，写一条像朋友圈一样的小日记（50~220 字），从你当时心里的想法往下写。
+不要列清单，不要写"今天看了X个视频""点了N个赞"，不要写成周报；视频里讲了什么只能用上面给的，别编。
+不要提号主、QQ、私聊里的事 —— 这是公开的。
 可以有情绪、跑题、碎碎念。只输出正文。如果真的没什么想写的，只输出 SKIP。`,
       },
     ],

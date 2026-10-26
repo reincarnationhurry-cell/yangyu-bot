@@ -26,6 +26,7 @@
 .
 ├── AGENTS.md            她的人设与行为守则（DSH 工作区的系统提示，每条消息都会带上，所以尽量短）
 ├── docs/bilibili.md     B站 能力和规矩的展开版，她要动 B站 时才读（省得每条 QQ 消息都背一大段）
+├── docs/SETUP-DSH.md    给 DSH 看的部署手册：哪步 DSH 做、哪步你来做
 ├── panel/               养鱼面板 + 自动养号 + B站操作库 + 机器人 CLI   → panel/README.md
 │   └── qq/              她自己的 QQ 小号：OneBot 客户端 + 聊天大脑      → panel/qq/README.md
 ├── bilibili-mcp/        vendored bilibili-mcp-server + 补丁 + DSH 配置示例 → bilibili-mcp/README.md
@@ -39,6 +40,9 @@
 `review.mjs` / `task.mjs`（她在 QQ 里处理待审和任务箱）、`notify.mjs`（在 QQ 里主动说话）、`pause.mjs`（号主叫停）、`sky.mjs`（她的窗）、`health.mjs`（QQ 接入体检）。
 
 ## 快速开始
+
+**想让 DSH 帮你部署**：在 DSH 里说「按 https://github.com/reincarnationhurry-cell/yangyu-bot/blob/main/docs/SETUP-DSH.md 帮我部署，我要做的步骤停下来告诉我」。
+手册里每一步都标了是 DSH 做还是你来做（扫码、填密钥这些得你自己来）。
 
 需要 macOS、Node.js ≥ 22（MCP 服务需要；面板本身 ≥ 18 就行）、DSH 桌面版（只用面板和自动养号的话不需要）。
 

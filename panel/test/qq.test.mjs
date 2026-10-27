@@ -44,7 +44,7 @@ const store = await import('../store.mjs');
 store.writeConfig({ llm: { baseUrl: `http://127.0.0.1:${server.address().port}`, model: 'fake' }, sky: { enabled: false } });
 store.writeSecrets({ llmApiKey: 'test' });
 
-const { OneBot, readMessage, seg } = await import('../qq/onebot.mjs');
+const { OneBot, readMessage, recordSegments, seg } = await import('../qq/onebot.mjs');
 const owner = await import('../qq/owner.mjs');
 const brain = await import('../qq/brain.mjs');
 
@@ -67,6 +67,12 @@ test('OneBot：连上拿到自己的号，收消息、发消息都对得上 echo
 test('readMessage：图片语音如实写出来，CQ 码也认', () => {
   assert.equal(readMessage({ message: [{ type: 'text', data: { text: '看' } }, { type: 'image', data: {} }, { type: 'record', data: {} }] }), '看[图片][语音]');
   assert.equal(readMessage({ message: '晚安[CQ:face,id=75]&#91;嘿&#93;' }), '晚安[表情][嘿]');
+});
+
+test('recordSegments：段数组和 CQ 码里的语音都拿得到 file', () => {
+  assert.deepEqual(recordSegments({ message: [{ type: 'text', data: { text: '听' } }, { type: 'record', data: { file: 'a.amr' } }] }), [{ file: 'a.amr' }]);
+  assert.deepEqual(recordSegments({ message: '[CQ:record,file=b.amr,file_size=12]' }), [{ file: 'b.amr' }]);
+  assert.deepEqual(recordSegments({ message: [{ type: 'image', data: {} }] }), []);
 });
 
 test('persona：拿到性格和说话方式，不带 DSH 里跑命令的那些', () => {

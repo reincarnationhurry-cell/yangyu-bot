@@ -7,8 +7,9 @@
  *
  * notify.mjs 发提醒、汇报、分享时也走这里（sendOwner）：小号能主动发，不用等号主先开口。
  */
-import { OneBot, seg, readMessage, imageSegments } from './onebot.mjs';
+import { OneBot, seg, readMessage, imageSegments, recordSegments } from './onebot.mjs';
 import * as brain from './brain.mjs';
+import * as voice from './voice.mjs';
 import * as dsh from './dsh.mjs';
 import * as owner from './owner.mjs';
 import * as memory from '../memory.mjs';
@@ -70,6 +71,8 @@ async function onMessage(ev) {
   if (!text) return;
   // 图片先让 DSH 网关里能看图的模型看一眼，把「[图片]」换成她看到的样子
   if (text.includes('[图片]') && readConfig().qq.dsh.enabled) text = await seeImages(ev, text);
+  // 语音在本机听写成文字，把「[语音]」换成他说的话
+  if (text.includes('[语音]') && voice.canHear()) text = await hearVoices(ev, text);
   if (/^\/(new|重来|清空)$/.test(text)) {
     owner.resetContext();
     await sendText('好，那我们重新开始聊～');
@@ -116,6 +119,20 @@ async function seeImages(ev, text) {
       if (buf) desc = await dsh.describeImage(buf, { hint });
     } catch (e) { console.error('[qq] 看图', e.message); }
     text = text.replace('[图片]', desc ? `[图片：${desc}]` : '[图片（没看清）]');
+  }
+  return text;
+}
+
+/** 消息里的语音：问 NapCat 要 mp3，本机听写；听不了的就留着 [语音] */
+async function hearVoices(ev, text) {
+  for (const rec of recordSegments(ev).slice(0, 3)) {
+    let said = '';
+    try {
+      bot?.call('set_input_status', { user_id: Number(readConfig().qq.ownerQQ), event_type: 1 }).catch(() => {}); // 听的时候也显示「正在输入」
+      const r = await bot?.call('get_record', { file: rec.file, out_format: 'mp3' });
+      if (r?.base64) said = await voice.transcribe(Buffer.from(r.base64, 'base64'));
+    } catch (e) { console.error('[qq] 听语音', e.message); }
+    text = text.replace('[语音]', said ? `[语音：${said}]` : '[语音（没听清）]');
   }
   return text;
 }

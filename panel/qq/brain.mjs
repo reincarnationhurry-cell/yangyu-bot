@@ -10,22 +10,20 @@
  *
  * 另外 QQ 小号可以主动发消息（官方机器人不行），所以她白天隔了很久没听到号主说话，会自己想想要不要找他（maybeReachOut）。
  */
-import { readFileSync, readdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import * as llm from '../llm.mjs';
 import * as memory from '../memory.mjs';
 import * as mind from '../mind.mjs';
 import * as sky from '../sky.mjs';
 import * as owner from './owner.mjs';
+import { VOICES, DEFAULT_VOICE } from './voice.mjs';
 import {
   ROOT, readConfig, readReview, readTasks, addTask, updateTask, readState, readPause, setPause, clearPause,
   localDate,
 } from '../store.mjs';
 
 const STICKERS = join(ROOT, 'stickers');
-const VOICES = ['Meijia', 'Flo', 'Eddy'];
 
 // ─── 人设：从 AGENTS.md 里拿，保持一份 ─────────────────────────
 // AGENTS.md 是写给 DSH 里的她的，里面有「跑 node panel/xxx.mjs」这类命令；这边用工具做事，
@@ -51,7 +49,7 @@ const HOW = `## 在 QQ 里怎么做事（你现在用的是自己的 QQ 号，�
   问「做完没」调 bili_tasks。BV 号必须是搜出来的或他给的，绝不凭记忆编。
 - 他说「我打游戏了」「开会呢」「先别吵」就调 pause；说「好了」「打完了」就调 resume。没说就照常。
 - 他回「可以」「发吧」「改成……」「算了」这种没头没尾的话，多半是在回待审提醒：先调 reviews 看看，再用 review_decide。
-- 他发来的图片会写成「[图片：……]」，冒号后面是你看到的样子，直接照着聊；只写着 [图片] 的是没看清。语音你听不了，老实说，可以撒个娇让他打字。
+- 他发来的图片会写成「[图片：……]」，冒号后面是你看到的样子，直接照着聊；只写着 [图片] 的是没看清。他发来的语音会写成「[语音：……]」，是听写出来的，偶尔有错字，照着意思聊；只写着 [语音] 的是没听清，老实说，可以撒个娇让他再说一遍或者打字。
 - 他问的事你不确定、或者要最新的信息（新闻、天气、价格、某个东西是什么、怎么弄），调 research 去查，同时回一句「等我查一下」；
   查到了后台会让你自己告诉他，这条回复别编答案。
 - 情绪很强、现有表情包都对不上的时候，可以调 make_sticker 给自己做一张新的（一天最多一张），做好了会自己发给他。`;
@@ -68,7 +66,7 @@ export function toolDefs() {
   return [
     fn('send_sticker', '发一张表情包（跟你的回复一起发）', { name: { type: 'string', enum: names, description: '表情包名' } }, ['name']),
     fn('send_voice', '发一条语音（跟你的回复一起发）。text 是要说的话，像说话，30 秒内，不要表情符号', {
-      text: { type: 'string' }, voice: { type: 'string', enum: VOICES, description: '默认 Meijia，偏温柔' },
+      text: { type: 'string' }, voice: { type: 'string', enum: Object.keys(VOICES), description: '默认 Xiaoyi，活泼可爱；Xiaoxiao 更温柔，安慰人、说晚安用' },
     }, ['text']),
     fn('remember', '记住一件关于号主的事（以后每次聊天都会带着）。一句话、第三人称', {
       text: { type: 'string' }, kind: { type: 'string', enum: owner.KINDS },
@@ -111,7 +109,7 @@ export async function runTool(name, args, out) {
     case 'send_voice': {
       const text = String(a.text || '').replace(/[*_#`]/g, '').trim().slice(0, 140);
       if (!text) return '没有要说的话';
-      out.voice = { text, voice: VOICES.includes(a.voice) ? a.voice : 'Meijia' };
+      out.voice = { text, voice: Object.hasOwn(VOICES, a.voice || '') ? a.voice : DEFAULT_VOICE };
       return '好，会跟回复一起发';
     }
     case 'remember': {
@@ -269,17 +267,8 @@ export async function researchReply(question, found) {
   return tidyReply(r.content);
 }
 
-// ─── 语音：macOS say → mp3（NapCat 自己转成 QQ 的语音格式） ────────
-export function voiceB64(text, voice = 'Meijia') {
-  const dir = mkdtempSync(join(tmpdir(), 'yy-voice-'));
-  try {
-    execFileSync('/usr/bin/say', ['-v', voice, '-o', join(dir, 'v.aiff'), text], { timeout: 30000 });
-    execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', join(dir, 'v.aiff'), '-ar', '24000', '-ac', '1', '-b:a', '64k', join(dir, 'v.mp3')], { timeout: 30000 });
-    return readFileSync(join(dir, 'v.mp3')).toString('base64');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+// 语音（edge-tts，不行就 say）在 voice.mjs
+export { voiceB64 } from './voice.mjs';
 
 export const stickerB64 = (name) => readFileSync(join(STICKERS, `${name}.png`)).toString('base64');
 

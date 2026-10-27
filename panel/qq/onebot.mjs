@@ -119,6 +119,17 @@ export function imageSegments(ev) {
   return ev.message.filter((s) => s.type === 'image' && !(s.data?.summary && s.data.summary !== '[图片]')).map((s) => ({ url: s.data?.url, file: s.data?.file }));
 }
 
+/** 消息里的语音段（拿 file 去问 NapCat 的 get_record 要音频） */
+export function recordSegments(ev) {
+  if (!Array.isArray(ev.message)) {
+    return [...String(ev.message || '').matchAll(/\[CQ:record,([^\]]*)\]/g)].map((m) => {
+      const kv = Object.fromEntries(m[1].split(',').map((x) => [x.slice(0, x.indexOf('=')), x.slice(x.indexOf('=') + 1).replace(/&amp;/g, '&').replace(/&#44;/g, ',')]));
+      return { file: kv.file };
+    });
+  }
+  return ev.message.filter((s) => s.type === 'record').map((s) => ({ file: s.data?.file }));
+}
+
 // ─── 消息段 ────────────────────────────────────────────────
 export const seg = {
   text: (text) => ({ type: 'text', data: { text } }),
@@ -127,7 +138,7 @@ export const seg = {
 };
 
 /**
- * 收到的消息 → 一句给她看的文字。她看不了图、听不了语音，就如实写成 [图片] [语音]，别让她装作看见了。
+ * 收到的消息 → 一句给她看的文字。图和语音先如实写成 [图片] [语音]，看过、听过了再由 index.mjs 换成内容，别让她装作看见了。
  * message 可能是消息段数组，也可能是 CQ 码字符串（看 NapCat 的消息格式设置）。
  */
 export function readMessage(ev) {

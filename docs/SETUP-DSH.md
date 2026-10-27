@@ -37,6 +37,8 @@ ffmpeg -version | head -1   # 语音要用
 - 🙋 缺 Node ≥ 22：让号主去 https://nodejs.org 装 LTS 版。
 - 🙋 缺 ffmpeg：有 Homebrew 的话让号主自己跑 `brew install ffmpeg`；没有就先装 Homebrew（https://brew.sh）。
 - 可选：Chrome（「等你帮她点」那个功能要用，没有也能跑）。
+- 🙋 可选：好听的语音和听懂语音。有 [uv](https://docs.astral.sh/uv/) 的话让号主自己跑 `uv tool install edge-tts`（她的声音）和
+  `uv tool install mlx-whisper`（听号主发的语音，Apple 芯片才行）。不装也能跑，声音退回 `say`，语音就听不了。
 
 ## 1. 拿到代码 🤖
 

@@ -32,7 +32,7 @@
 ├── bilibili-mcp/        vendored bilibili-mcp-server + 补丁 + DSH 配置示例 → bilibili-mcp/README.md
 ├── diary/               养鱼日记（发 B站 动态）                          → diary/README.md
 ├── stickers/            她的表情包（INDEX.md 是清单）
-├── tts/                 语音：macOS say → 带音频的 mp4（QQ 能发）
+├── tts/                 语音：edge-tts（不行就 macOS say）→ 带音频的 mp4（QQ 能发）
 └── ops/                 运维笔记（熄屏保活、回复截断）+ 开发笔记 dev-notes.md
 ```
 

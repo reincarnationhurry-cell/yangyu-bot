@@ -62,12 +62,20 @@ Docker 和镜像都是你自己装、自己拉（面板不替你下载运行第�
 - 她能用的工具（都在进程里直接调，不跑命令，所以快）：发表情包、发语音、记住 / 改正关于你的事、翻记忆、
   把 B站 的活交给后台、看后台做到哪了、叫停 / 恢复、看待审、处理待审；查资料、做新表情交给 DSH（见下面「外挂」）。
 - 你连着发几条，她等 2.5 秒没新的再一起回；你发的图她会先看一眼再回；你发的语音她在本机听写成文字再回（要装 mlx-whisper，没装就老实说听不了）。
-- 她发的语音用 edge-tts（微软的神经网络音色，要联网），连不上就退回 macOS 的 say。两个都是可选的，自己装：
+- 她发的语音按顺序试：本机的 GPT-SoVITS（克隆的声音）→ edge-tts（微软的神经网络音色，要联网）→ macOS 的 say。都是可选的，自己装：
 
   ```bash
   uv tool install edge-tts      # 好听的声音
   uv tool install mlx-whisper   # 听你的语音（只能在 Apple 芯片上跑，第一次会下 1.6G 左右的模型）
   ```
+
+  GPT-SoVITS（[RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)）要你自己装到 `~/GPT-SoVITS`（带 `.venv`），
+  `tts_infer.yaml` 的 `custom` 段在 Mac 上用 `device: mps`、`is_half: false`。然后：
+  - 参考音频放 `panel/data/voice/ref.wav`（3~10 秒、只有一个人、没背景音），它**一字不差**的原文放 `ref.txt`。
+    素材要有授权（你自己的、朋友同意的）。不放就不用 GPT-SoVITS，直接走 edge-tts。
+  - `panel/install-gsv-launchd.sh` 让它的接口（127.0.0.1:9880）开机自启；面板连上 QQ 后会先替她说一句预热，头一句要二三十秒。
+  - 训练好的模型（`.ckpt` + `.pth`）换进 `tts_infer.yaml` 的 `custom` 段，再 `launchctl kickstart -k gui/$(id -u)/com.$(whoami).yangyu-gsv`。
+    别人分享的模型是 pickle 格式，加载就能跑代码，只用来源可信的。
 - 关于你的事存在 `panel/data/owner.json`，聊天记录在 `panel/data/qq-chat.jsonl`，面板「QQ 连接」里能看、记错了能删。
   每晚 22 点后她翻一遍当天的聊天，补记几条关于你的事，再写一句进她自己的记忆。
 - 白天（默认 9~22 点）你 4 个小时没说话，她会想想要不要找你：分享今天刷到的、问问你的计划、提醒吃饭，或者就是想你了；

@@ -35,6 +35,7 @@ export function start() {
   bot.on('close', () => logAction({ kind: 'qq', source: 'auto', ok: false, detail: 'QQ 小号断开了，会自己重连' }));
   bot.on('message', (ev) => onMessage(ev).catch((e) => console.error('[qq]', e)));
   bot.start();
+  voice.warmUp().catch(() => {});
   ticker = setInterval(() => tick().catch((e) => console.error('[qq] tick', e.message)), 60_000);
 }
 
@@ -163,7 +164,7 @@ async function deliver(out) {
   }
   if (out.voice) {
     try {
-      await bot.sendPrivate(readConfig().qq.ownerQQ, [seg.record(brain.voiceB64(out.voice.text, out.voice.voice))]);
+      await bot.sendPrivate(readConfig().qq.ownerQQ, [seg.record(await brain.voiceB64(out.voice.text, out.voice.voice))]);
       owner.logChat({ from: 'her', text: out.voice.text, kind: 'voice' });
     } catch (e) {
       console.error('[qq] 语音', e.message);

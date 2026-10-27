@@ -39,6 +39,7 @@ ffmpeg -version | head -1   # 语音要用
 - 可选：Chrome（「等你帮她点」那个功能要用，没有也能跑）。
 - 🙋 可选：好听的语音和听懂语音。有 [uv](https://docs.astral.sh/uv/) 的话让号主自己跑 `uv tool install edge-tts`（她的声音）和
   `uv tool install mlx-whisper`（听号主发的语音，Apple 芯片才行）。不装也能跑，声音退回 `say`，语音就听不了。
+  想要克隆的声音（GPT-SoVITS）是进阶玩法，装起来要好几个 G，见 `panel/qq/README.md`，别默认替号主装。
 
 ## 1. 拿到代码 🤖
 

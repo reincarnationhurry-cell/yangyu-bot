@@ -694,6 +694,7 @@ async function pageAutopilot(main) {
           ${num('qq.silentHours', '你多久没说话才找（小时）', { min: 1, max: 24 })}
           ${num('qq.activeStart', '主动找你（从几点）', { max: 23 })}
           ${num('qq.activeEnd', '主动找你（到几点）', { max: 24 })}
+          ${num('qq.voiceChance', '平时用语音回你的概率 %', { pct: 1, max: 100, hint: '短的话才会念，太长、带链接的照样打字；0 = 只在她自己想发时才发' })}
         </div>
         <div class="cfg-grid" style="margin-top:6px">
           ${tog('qq.dsh.enabled', '外挂：查资料 / 看图 / 做表情包', '借 DSH：查资料走她专用的 DSH 配置，看图和做表情走 DSH 本地网关')}

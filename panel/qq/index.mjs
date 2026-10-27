@@ -153,6 +153,9 @@ async function fetchImage({ url, file }) {
 
 // ─── 发 ────────────────────────────────────────────────────
 async function deliver(out) {
+  // 平时回的话，有一定概率直接念给他听（她自己没想发语音、话也念得出来的时候）
+  const said = !out.voice && Math.random() < (readConfig().qq.voiceChance ?? 0) ? voice.speakable(out.text) : null;
+  if (said) { out.voice = { text: said, voice: voice.DEFAULT_VOICE }; out.text = ''; }
   if (out.text) await sendText(out.text);
   if (out.research) doResearch(out.research);
   if (out.makeSticker) doSticker(out.makeSticker);

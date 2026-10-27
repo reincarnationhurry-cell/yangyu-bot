@@ -92,6 +92,21 @@ export async function warmUp() {
   return false;
 }
 
+/**
+ * 一句回复能不能直接念出来：太长（念不完 30 秒）、带链接 / 代码 / 好多数字的不念，返回 null；
+ * 能念就去掉颜文字、qwq 这类，返回要念的话
+ */
+export function speakable(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 80 || /https?:\/\/|www\.|`|BV[0-9A-Za-z]{10}|\d{4,}/.test(t)) return null;
+  const said = t
+    .replace(/\([^()（）]{0,12}\)|（[^()（）]{0,12}）/g, (m) => (/[\u4e00-\u9fa5]{2,}/.test(m) ? m : '')) // 颜文字；括号里是正经话的留着
+    .replace(/\b(qwq|QAQ|x_x|orz|awa|hhh+)\b/gi, '')
+    .replace(/[^\u4e00-\u9fa5A-Za-z0-9，。！？、…~～,.!?\s]/g, '')
+    .replace(/\s+/g, ' ').trim();
+  return /[\u4e00-\u9fa5]/.test(said) ? said : null;
+}
+
 // ─── 听 ────────────────────────────────────────────────────
 export const canHear = () => !!bin('mlx_whisper');
 

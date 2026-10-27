@@ -238,6 +238,7 @@ export const DEFAULT_CONFIG = {
     silentHours: 4, // 你多久没说话才算「隔了很久」
     activeStart: 9, // 只在这段时间里主动找（点）
     activeEnd: 22,
+    voiceChance: 0.15, // 平时回你的话，有多大概率直接用语音说（太长、带链接的不会）
     // 外挂（qq/dsh.mjs）：查资料交给她专用的 DSH 配置，看图、做表情包走 DSH 本地网关里的模型
     dsh: {
       enabled: true,

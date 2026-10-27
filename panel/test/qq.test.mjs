@@ -75,6 +75,18 @@ test('recordSegments：段数组和 CQ 码里的语音都拿得到 file', () => 
   assert.deepEqual(recordSegments({ message: [{ type: 'image', data: {} }] }), []);
 });
 
+test('speakable：短的话去掉颜文字再念，长的、带链接的不念', async () => {
+  const { speakable } = await import('../qq/voice.mjs');
+  assert.equal(speakable('好啦好啦 (￣▽￣) 我在呢qwq'), '好啦好啦 我在呢');
+  assert.equal(speakable('嘿嘿(๑•̀ㅂ•́)و✧ 今天也加油！'), '嘿嘿 今天也加油！');
+  assert.equal(speakable('我刚刚（偷偷）看了一眼'), '我刚刚偷偷看了一眼'); // 括号里的正经话留着，括号本身不念
+  assert.equal(speakable('你看这个 https://b23.tv/abc'), null);
+  assert.equal(speakable('BV1xx411c7mD 这个超好笑'), null);
+  assert.equal(speakable('长'.repeat(81)), null);
+  assert.equal(speakable('(￣▽￣)'), null);
+  assert.equal(speakable(''), null);
+});
+
 test('persona：拿到性格和说话方式，不带 DSH 里跑命令的那些', () => {
   const p = brain.persona();
   assert.match(p, /温柔/);

@@ -105,3 +105,53 @@ DSH 的记忆插件（`@a9i5k4/dsh-auto-memory`）是给写代码设计的，系
 - AGENTS.md 里已经让她静默做、别在回复里提（工作区规则能压住大部分情况）。
 - 想彻底不要「昨日反思」：DSH 设置 → 记忆插件 → 关掉「每日反思」（对应 `~/.dsh/dsh-auto-memory.json` 的 `reflectEnabled`，全局生效，
   其他工作区也会一起关）。她自己的睡前反思在面板里（`mind.mjs`），不受影响。
+
+## 六、小号被风控了 → 切回官方机器人（2026-10-28 实测）
+
+### 结论
+QQ 小号线路（NapCat）不适合长期挂机：**小号会被 QQ 风控**。这次的表现是
+QQ 安全中心「你的账号身份验证信息已失效，部分功能受限」+「已登录设备风险提醒（QQ桌面版-Linux）」，
+NapCat 每 2 分钟重登一次全部失败：`[Core] [Login] Login Error, ErrType: 1 ErrCode: 3`，扫码也不管用。
+
+对照：**官方机器人线路（DSH + dsh-im-connect）不受这个风控影响**，官方渠道更稳。
+
+### 判断信号（不用翻代码）
+- `docker logs napcat` 刷 `Login Error, ErrType 1, ErrCode 3`，伴 `二维码已保存到 /app/napcat/cache/qrcode.png`；
+- 面板顶挂红条「QQ 小号没连上 NapCat」，`/api/qq` 里 `connected: false`、`error: 连接出错`；
+- `panel/data/actions.jsonl` 里反复「QQ 小号断开了，会自己重连」→「小号连上了」→ 又断开；
+- 手机 QQ 或 QQ 安全中心里出现身份验证失效/功能受限。
+
+### 切回官方线路（面板上点一下就行）
+
+2026-10-28 起面板加了**一键切线路**：自动养号 →「💬 QQ 连接」顶上的
+**「换回官方机器人」** 按钮，会自己停掉 NapCat 容器并把面板切回官方。
+**「换成小号线路」** 反过来：拉起容器、切到小号，并把登录二维码显示在面板上（不用再去 WebUI 找）。
+旁边还有「起容器 / 停容器 / 重启换张码」。小号解冻后过几天想再试，点「换成小号线路」扫码即可。
+
+要命令行做（比如面板打不开）也一样：
+
+```bash
+# 1. 面板配置切回官方机器人（面板进程会自己把 OneBot 客户端停掉）
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"qq":{"mode":"official"}}' http://127.0.0.1:8899/api/autopilot/config
+
+# 2. 停掉 NapCat 容器（不然它继续每 2 分钟重登，账号越弄越糟）
+cd panel/qq/napcat && docker compose down
+```
+
+核对：`/api/qq` 里 `mode: official`、`on: false`；
+`curl http://127.0.0.1:8899/api/health` 返回 `ok: true`、`host: 0.2.1-rc.3`、`plugin.version` 在插件声明支持的列表里；
+`~/.dsh/dsh-im-connect/gateway.log` 末行有时间在往后走的「网关就绪」。
+
+### 切之前先备份
+`panel/data/autopilot.json` 是面板配置，切线路会改它。先 `cp` 一份带时间戳的 `.bak`（本仓库习惯）。
+
+### 注意（和官方线路的历史坑不同）
+- 这不是 2026-10-24 那个「DSH 升级、插件 peer 范围不含新宿主」的故障：那次是**网关根本不启动**，
+  这次网关正常、插件版本也对得上，坏的只是小号本身。别混为一谈。
+- 官方机器人的两个固有限制照旧：**只能在你说话后一小时内回**（`README.md` 有说明），**不能主动开口**；
+  想让她凭空找你，只有小号线路能做到 —— 所以切回来等于放弃主动消息，接受这个交换。
+- 小号那边的聊天历史、`owner.json` 里关于号主的事、`qq-chat.jsonl` 都还在本地，切回官方不会删；
+  以后小号解冻了，把 `qq.mode` 改回 `onebot` 再 `docker compose up -d` 就能续上。
+- `panel/data/secrets.json` 的 `qqOpenId` 要填**你在 QQ 机器人里的 openid**，别把别处的 URL 填进来
+  （面板上这个框和「模型」的接口地址长得不完全一样，容易看错）。

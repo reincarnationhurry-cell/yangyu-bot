@@ -228,10 +228,13 @@ export const DEFAULT_CONFIG = {
   },
   // QQ 怎么接：official = DSH + dsh-im-connect 插件 + QQ 官方机器人（只能在你说话后一小时内回）；
   // onebot = 她自己的 QQ 小号（本机 NapCat），面板自己当大脑，能主动找你。token 在 secrets.json
+  // telegram = 号主在 @BotFather 建的 bot（官方接口，不会被封），跟小号一样面板当大脑。token 在 secrets.json 的 telegramToken
+  // （这一段还叫 qq：聊天、主动找你、语音这些设置两条线共用）
   qq: {
     mode: 'official',
     wsUrl: 'ws://127.0.0.1:3001', // NapCat 的 OneBot v11 正向 WebSocket
     ownerQQ: '', // 你的 QQ 号：她只跟你说话，别人私聊不理
+    tg: { ownerId: '', ownerName: '' }, // Telegram 上的号主：第一个私聊 bot 的人，面板上能解绑
     model: '', // 聊天用的模型，空 = 跟上面「模型」一样
     reachOut: true, // 白天隔了很久没听到你说话，她会自己想想要不要找你
     reachOutMax: 2, // 一天最多主动找几次

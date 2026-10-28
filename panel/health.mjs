@@ -18,6 +18,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { logAction, readConfig } from './store.mjs';
 import * as qq from './qq/index.mjs';
+import * as napcat from './qq/napcat.mjs';
 
 const HOME = homedir();
 const APP = process.env.DSH_APP || '/Applications/DeepSeek Harness.app';
@@ -93,12 +94,27 @@ export function diagnoseOnebot(st, now = Date.now()) {
   return { ok: !problems.length, problems, mode: 'onebot', connected: st.connected, selfId: st.selfId };
 }
 
+export function diagnoseTelegram(st, now = Date.now()) {
+  const problems = [];
+  if (!st.on) problems.push({ code: 'tg-config', text: '选了 Telegram，但还没填 bot 的 token', fix: '面板「自动养号 → QQ 连接」填上 @BotFather 给的 token' });
+  else if (!st.connected && st.startedAt && now - st.startedAt > 3 * 60_000) {
+    problems.push({ code: 'tg', text: `Telegram 没连上${st.error ? `（${st.error}）` : ''}，她收不到你的消息`, fix: '确认代理开着（全局或 TUN 模式），token 没填错' });
+  }
+  return { ok: !problems.length, problems, mode: 'telegram', connected: st.connected, selfId: st.selfId };
+}
+
 let last = { ok: true, problems: [], checkedAt: 0 };
 const notified = new Set();
 
 /** 现查一次（顺手记录、弹通知） */
-export function check({ notify = true } = {}) {
-  if (readConfig().qq.mode === 'onebot') return report(diagnoseOnebot(qq.status()), notify);
+export async function check({ notify = true } = {}) {
+  if (readConfig().qq.mode === 'telegram') return report(diagnoseTelegram(qq.status()), notify);
+  if (readConfig().qq.mode === 'onebot') {
+    // 顺手止损：小号一直在登不进去，就把容器停掉。留着它每 2 分钟重登一次只会把号弄得更糟
+    // （2026-10-28 就这么挂了一整天）。停一次就够了，别每 5 分钟停一回。
+    await napcat.stopIfLoginStuck().catch(() => {});
+    return report(diagnoseOnebot(qq.status()), notify);
+  }
   if (!existsSync(APP)) return (last = { ok: true, problems: [], skipped: '没装 DSH 桌面版', checkedAt: Date.now() });
   return report(diagnose({ host: hostVersion(), plugin: pluginInfo(), startedAt: hostStartedAt(), gateway: lastGatewayReady() }), notify);
 }
@@ -120,7 +136,7 @@ function report(r, notify) {
   return last;
 }
 
-/** 给面板：5 分钟内查过就用上次的 */
-export function status() {
+/** 给面板：5 分钟内查过就用上次。返回 Promise（缓存命中时也包一层，调用方统一 await） */
+export async function status() {
   return Date.now() - last.checkedAt < 5 * 60_000 ? last : check();
 }

@@ -23,6 +23,7 @@ import * as social from './social.mjs';
 import * as sky from './sky.mjs';
 import * as health from './health.mjs';
 import * as qq from './qq/index.mjs';
+import * as napcat from './qq/napcat.mjs';
 import * as owner from './qq/owner.mjs';
 import { openAsHer } from './browser.mjs';
 import {
@@ -159,10 +160,10 @@ const routes = {
       tasksPending: readTasks().filter((t) => t.status === 'pending').length,
       reviewPending: readReview().filter((r) => r.status === 'pending').length,
       autopilot: autopilotView(),
-      health: health.status(),
+      health: await health.status(),
     };
   },
-  'GET /api/health': async (q) => (q.get('fresh') ? health.check() : health.status()),
+  'GET /api/health': async (q) => (q.get('fresh') ? await health.check() : await health.status()),
 
   // 扫码登录（掉登录时用）
   'POST /api/login/qr': async () => bili.qrLoginStart(),
@@ -221,10 +222,11 @@ const routes = {
   // 自动养号
   'GET /api/autopilot': async () => autopilotView(),
   'POST /api/autopilot/config': async (_q, b) => {
-    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, onebotToken, modelscopeToken, ...patch } = b;
+    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, onebotToken, telegramToken, modelscopeToken, ...patch } = b;
     if (typeof modelscopeToken === 'string' && modelscopeToken.trim()) writeSecrets({ modelscopeToken: modelscopeToken.trim() });
     if (typeof llmApiKey === 'string') writeSecrets({ llmApiKey: llmApiKey.trim() });
     if (typeof onebotToken === 'string' && onebotToken.trim()) writeSecrets({ onebotToken: onebotToken.trim() });
+    if (typeof telegramToken === 'string' && telegramToken.trim()) writeSecrets({ telegramToken: telegramToken.trim() });
     // QQ 提醒的凭证：只存本机 secrets.json，留空表示不改
     for (const [k, v] of Object.entries({ qqAppId, qqAppSecret, qqOpenId })) {
       if (typeof v === 'string' && v.trim()) writeSecrets({ [k]: v.trim() });
@@ -242,9 +244,9 @@ const routes = {
     if (before.enabled !== cfg.enabled) logAction({ kind: 'autopilot', detail: cfg.enabled ? '打开了自动养号' : '关掉了自动养号' });
     // QQ 连接的设置变了（或者换了 token）就重连
     const qqKeys = (c) => JSON.stringify([c.qq.mode, c.qq.wsUrl, c.qq.ownerQQ]);
-    if (qqKeys(before) !== qqKeys(cfg) || onebotToken) {
+    if (qqKeys(before) !== qqKeys(cfg) || onebotToken || telegramToken) {
       qq.start();
-      if (before.qq.mode !== cfg.qq.mode) logAction({ kind: 'qq', detail: cfg.qq.mode === 'onebot' ? 'QQ 换成了她自己的小号' : 'QQ 换回了官方机器人（DSH 插件）' });
+      if (before.qq.mode !== cfg.qq.mode) logAction({ kind: 'qq', detail: { onebot: 'QQ 换成了她自己的小号', official: 'QQ 换回了官方机器人（DSH 插件）', telegram: '换到了 Telegram' }[cfg.qq.mode] });
     }
     return autopilotView();
   },
@@ -473,8 +475,23 @@ const routes = {
   'GET /api/notify': async () => notify.status(),
 
   // QQ 小号
-  'GET /api/qq': async () => qq.status(),
+  'GET /api/qq': async () => qq.panelStatus(),
   'POST /api/qq/test': async () => qq.test(),
+  // 一键切线路：改配置 + 起停 NapCat 容器 + 重连（面板「QQ 连接」顶上那两个按钮）
+  'POST /api/qq/mode': async (_q, b) => {
+    const r = await qq.setMode(String(b.mode || ''), { startNapcat: b.startNapcat !== false });
+    return { ok: true, ...r, ...(await qq.panelStatus()) };
+  },
+  'POST /api/qq/napcat': async (_q, b) => {
+    const what = String(b.action || '');
+    if (what === 'up') await napcat.up();
+    else if (what === 'down') await napcat.down();
+    else if (what === 'restart') await napcat.restart();
+    else throw new Error('只支持 up / down / restart');
+    return { ok: true, ...(await qq.panelStatus()) };
+  },
+  'POST /api/qq/napcat/logs': async (_q, b) => ({ log: await napcat.logs(b.limit) }),
+  'POST /api/qq/tg/unbind': async () => { qq.unbindTg(); return qq.panelStatus(); },
   'POST /api/qq/import-dsh': async () => ({ ...(await owner.importDsh()), ...qq.status() }),
   'POST /api/qq/fact/delete': async (_q, b) => { owner.removeFact(String(b.id || '')); return qq.status(); },
   'POST /api/qq/fact/update': async (_q, b) => { owner.updateFact(String(b.id || ''), String(b.text || '')); return qq.status(); },
@@ -521,6 +538,6 @@ server.listen(PORT, HOST, () => {
   auto.startScheduler();
   qq.start(); // 用小号时连 NapCat；用官方机器人时什么都不做
   // QQ 接入体检：DSH 自动升级后插件跟不上会静悄悄掉线，5 分钟看一眼
-  setTimeout(() => health.check(), 60_000);
-  setInterval(() => health.check(), 5 * 60_000);
+  setTimeout(() => health.check().catch(() => {}), 60_000);
+  setInterval(() => health.check().catch(() => {}), 5 * 60_000);
 });

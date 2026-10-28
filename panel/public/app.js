@@ -682,13 +682,15 @@ async function pageAutopilot(main) {
       </div>
       <div class="cfg-sec">
         <h3>💬 QQ 连接 <span id="qqState"></span></h3>
-        <p><b>官方机器人</b>：DSH + dsh-im-connect 插件，安全但限制多（只能在你说话后一小时内回，DSH 升级插件跟不上就掉线）。
-        <b>她自己的小号</b>：Docker 里跑 NapCat（容器里的 QQ 登小号），面板自己当大脑，能主动找你、发真的语音，不依赖 DSH。用非官方框架，<b>小号有被冻结的风险</b>。装法见 <code>panel/qq/README.md</code>。</p>
+        <p><b>官方机器人</b>：DSH + dsh-im-connect 插件，稳，但限制多（只能在你说话后一小时内回、不能主动找你，DSH 升级插件跟不上就掉线）。
+        <b>她自己的小号</b>：Docker 里跑 NapCat（容器里的 QQ 登小号），面板自己当大脑，能主动找你、发真的语音，不依赖 DSH。用非官方框架，<b>小号有被冻结的风险</b>。装法见 <code>panel/qq/README.md</code>。
+        <b>Telegram</b>：你在 @BotFather 建的 bot，官方接口不会被封，能主动找你、发语音条；这台 Mac 要能连上 Telegram（代理开全局 / TUN）。</p>
+        <div id="qqLine"></div>
         <div class="cfg-grid">
-          ${sel('qq.mode', '用哪个', [['official', '官方机器人（DSH 插件）'], ['onebot', '她自己的 QQ 小号（NapCat）']])}
           <div><label class="f">你的 QQ 号</label><input data-path="qq.ownerQQ" value="${esc(c.qq.ownerQQ || '')}" placeholder="她只跟你说话" autocomplete="off"></div>
           <div><label class="f">NapCat 地址</label><input data-path="qq.wsUrl" value="${esc(c.qq.wsUrl)}" autocomplete="off"><div class="hint">NapCat 里建的「WebSocket 服务器」</div></div>
           <div><label class="f">NapCat token</label><input type="password" id="onebotToken" placeholder="留空不改" autocomplete="off"></div>
+          <div><label class="f">Telegram bot token</label><input type="password" id="telegramToken" placeholder="留空不改" autocomplete="off"><div class="hint">@BotFather 给的那串，只存本机 secrets.json</div></div>
           ${tog('qq.reachOut', '白天会主动找你', '隔了很久没听到你说话，她自己想想要不要找你')}
           ${num('qq.reachOutMax', '一天最多主动找几次', { max: 10 })}
           ${num('qq.silentHours', '你多久没说话才找（小时）', { min: 1, max: 24 })}
@@ -703,7 +705,7 @@ async function pageAutopilot(main) {
           <div><label class="f">ModelScope 访问令牌</label><input type="password" id="modelscopeToken" placeholder="留空不改" autocomplete="off"><div class="hint">modelscope.cn/my/myaccesstoken 生成；账号要绑阿里云、过实名认证</div></div>
         </div>
         <div class="small muted" id="qqDsh" style="margin-top:4px"></div>
-        <div class="row" style="margin-top:10px"><button class="btn sm" id="qqTest">用小号发一条测试</button><button class="btn sm" id="qqImport">从 DSH 带记忆过来</button><span class="small muted" id="qqMsg"></span></div>
+        <div class="row" style="margin-top:10px"><button class="btn sm" id="qqTest">发一条测试</button><button class="btn sm" id="qqImport">从 DSH 带记忆过来</button><span class="small muted" id="qqMsg"></span></div>
         <details style="margin-top:10px"><summary class="small">她记得的关于你的事（<span id="qqFactN">0</span> 条；记错了能删）</summary><div id="qqFacts" class="small"></div></details>
       </div>
       <div class="cfg-sec">
@@ -795,7 +797,7 @@ async function pageAutopilot(main) {
     if (body.vip) delete body.vip.users; // 名单走单独的接口，别被这个页面里的旧名单覆盖
     const k = $('#llmKey').value.trim();
     if (k) body.llmApiKey = k;
-    for (const id of ['qqAppId', 'qqAppSecret', 'qqOpenId', 'onebotToken', 'modelscopeToken']) {
+    for (const id of ['qqAppId', 'qqAppSecret', 'qqOpenId', 'onebotToken', 'telegramToken', 'modelscopeToken']) {
       const v = $('#' + id)?.value.trim();
       if (v) body[id] = v;
     }
@@ -843,21 +845,96 @@ async function pageAutopilot(main) {
   });
   // QQ 连接
   const qqRender = (q) => {
-    $('#qqState').innerHTML = q.mode !== 'onebot' ? '<span class="chip">官方机器人</span>'
-      : q.connected ? `<span class="chip green">小号在线 ${esc(String(q.selfId || ''))}</span>` : `<span class="chip amber">${q.on ? '小号没连上' : '还没填你的 QQ 号'}</span>`;
-    $('#qqMsg').textContent = q.mode === 'onebot' ? [q.error && !q.connected ? `上次的错：${q.error}` : '', q.lastOwnerAt ? `你上次说话 ${ago(q.lastOwnerAt)}` : ''].filter(Boolean).join(' · ') : '';
+    const name = q.mode === 'telegram' ? 'Telegram' : '小号';
+    $('#qqState').innerHTML = q.mode === 'official' ? '<span class="chip">官方机器人</span>'
+      : q.connected ? `<span class="chip green">${name}在线 ${esc(String(q.selfId || ''))}</span>`
+      : `<span class="chip amber">${q.on ? `${name}没连上` : q.mode === 'telegram' ? '还没填 bot token' : '还没填你的 QQ 号'}</span>`;
+    $('#qqMsg').textContent = q.mode !== 'official' ? [q.error && !q.connected ? `上次的错：${q.error}` : '', q.lastOwnerAt ? `你上次说话 ${ago(q.lastOwnerAt)}` : ''].filter(Boolean).join(' · ') : '';
+    renderQqLine(q);
     const d = q.dsh || {};
     $('#qqDsh').textContent = !d.enabled ? '外挂关着' : !d.cli ? '⚠️ 没找到 DSH 的命令行，查资料用不了' : !d.profile ? `⚠️ DSH 里还没有「她专用」的配置，查资料用不了（见 panel/qq/README.md）` : `外挂就绪：查资料走她专用的 DSH · ${d.hasModelscopeToken ? '做表情包：令牌已填' : '做表情包：还没填 ModelScope 令牌'}${d.stickerOn ? ` · 今天（${d.stickerOn}）做过新表情了` : ''}`;
     $('#qqFactN').textContent = q.facts.length;
     $('#qqFacts').innerHTML = q.facts.length ? q.facts.slice().reverse().map((f) => `<div class="row" style="justify-content:space-between;gap:8px;padding:3px 0"><span><span class="chip">${esc(f.kind)}</span> ${esc(f.text)} <span class="muted">${esc(f.at)}</span></span><button class="btn sm ghost" data-fact="${esc(f.id)}">×</button></div>`).join('') : '<div class="empty">还没记什么</div>';
     for (const b of $$('[data-fact]', main)) b.onclick = () => busy(b, async () => qqRender(await api('/api/qq/fact/delete', { id: b.dataset.fact })));
   };
+  // 一键切线路：改配置 + 起停 NapCat 容器 + 重连，一步到位，不用自己开终端跑 docker
+  let qqQrTimer = null; // 等二维码的轮询
+  const renderQqLine = (q) => {
+    clearTimeout(qqQrTimer); // 每次重画都先把上一次的等待掐掉，免得堆一堆定时器
+    const box = $('#qqLine');
+    if (!box) return;
+    const ct = q.container || {};
+    const isSmall = q.mode === 'onebot';
+    const isTg = q.mode === 'telegram';
+    const ctText = !ct.docker ? '<span class="chip amber">没装 docker</span>'
+      : !ct.exists ? '<span class="chip">容器还没建过</span>'
+      : ct.running ? `<span class="chip green">容器在跑</span> <span class="muted small">${esc(ct.detail || '')}</span>`
+      : `<span class="chip amber">容器停着</span> <span class="muted small">${esc(ct.detail || '')}</span>`;
+    const act = [];
+    if (isTg) {
+      act.push(!q.hasTgToken ? '在下面填上 bot token，点「保存设置」。'
+        : q.tgOwner ? `认出的你：<b>${esc(q.tgOwner)}</b>（不是你就点「解绑」，再用自己的号给 bot 发一句）。`
+        : '在 Telegram 里打开你的 bot 点「Start」：第一个私聊它的人会被认成你。');
+    } else if (!isSmall) {
+      act.push('切回官方时，容器会自动停掉——留着它会在后台每 2 分钟重登一次、次次失败，账号只会越弄越糟。');
+    } else if (!ct.docker) {
+      act.push('先装 OrbStack（https://orbstack.dev）或 Docker Desktop，打开一次，再回来点「起容器」。');
+    } else {
+      act.push('小号加你大号为好友；面板连上后就能主动找你、发真语音。');
+    }
+    box.innerHTML = `<div class="row wrap" style="gap:8px;align-items:center;margin:10px 0 4px">
+        <span class="small muted">现在走：</span><b style="font-size:13px">${isTg ? 'Telegram bot' : isSmall ? '她自己的小号（NapCat）' : '官方机器人（DSH 插件）'}</b>
+        <span style="flex:1"></span>${ctText}
+      </div>
+      <div class="row wrap">
+        <button class="btn sm ${isSmall || isTg ? '' : 'primary'}" id="qqToSmall" ${isSmall ? 'disabled' : ''}>换成小号线路</button>
+        <button class="btn sm ${isTg ? '' : 'primary'}" id="qqToTg" ${isTg ? 'disabled' : ''}>换成 Telegram</button>
+        <button class="btn sm" id="qqToOfficial" ${q.mode === 'official' ? 'disabled' : ''}>换回官方机器人</button>
+        ${isTg && q.tgOwner ? '<button class="btn sm ghost" id="qqTgUnbind">解绑</button>' : ''}
+        ${ct.docker ? `<button class="btn sm ghost" id="qqCtUp" ${ct.running ? 'disabled' : ''}>${ct.exists ? '起容器' : '建容器'}</button>
+        <button class="btn sm ghost" id="qqCtDown" ${ct.running ? '' : 'disabled'}>停容器</button>
+        <button class="btn sm ghost" id="qqCtRestart" ${ct.running ? '' : 'disabled'}>重启换张码</button>` : ''}
+      </div>
+      <div class="small muted" style="margin-top:6px">${act.join('')}</div>
+      ${isSmall && q.qr ? `<div class="row wrap" style="margin-top:10px;gap:12px;align-items:flex-start">
+        <img src="${q.qr.dataUrl}" alt="登录二维码" style="width:168px;height:168px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:6px">
+        <div class="small muted" style="max-width:320px">
+          <div style="margin-bottom:4px">用<b>小号</b>的手机 QQ 扫码登录（拿到码约 ${Math.round((Date.now() - q.qr.at) / 1000)} 秒前）。</div>
+          <div>也可以打开 <a href="http://127.0.0.1:6099/webui" target="_blank">NapCat WebUI</a>，密钥在 <code>panel/qq/napcat/.env</code> 里。</div>
+          <div style="margin-top:4px">码过期就点「重启换张码」。</div>
+        </div></div>`
+        : isSmall ? `<div class="small muted" style="margin-top:8px" id="qqQrWait">${!ct.docker ? '没装 docker，起不了容器。' : !ct.exists ? '容器还没建过，点「建容器」。' : ct.running ? '容器在跑，正在等它的登录二维码…（快则几秒，第一张可能要等它把 QQ 拉起来）' : '容器停着，先「起容器」再拿码。'}</div>` : ''}`;
+    const go = (btn, body, ok) => { if (btn) btn.onclick = (e) => busy(e.target, async () => { const r = await api(body.path, body.body); toast(r.napcatNote ? `切好了 ${r.napcatNote}` : ok); qqRender(r); }); };
+    go($('#qqToSmall'), { path: '/api/qq/mode', body: { mode: 'onebot' } }, '切到小号线路了，扫下面的码登小号');
+    go($('#qqToOfficial'), { path: '/api/qq/mode', body: { mode: 'official' } }, '切回官方机器人了');
+    go($('#qqToTg'), { path: '/api/qq/mode', body: { mode: 'telegram' } }, '切到 Telegram 了');
+    go($('#qqTgUnbind'), { path: '/api/qq/tg/unbind', body: {} }, '解绑了，用你的号给 bot 发一句');
+    for (const [id, action, ok] of [['qqCtUp', 'up', '容器起来了'], ['qqCtDown', 'down', '容器停了'], ['qqCtRestart', 'restart', '重启了，等几秒出新码']]) {
+      const b = $('#' + id);
+      if (b) b.onclick = (ev) => busy(ev.target, async () => { const r = await api('/api/qq/napcat', { action }); toast(ok); qqRender(r); });
+    }
+    // 容器在跑、码还没出来：自己盯着，出了码就把码显示出来（小号第一次拉起来要等它把 QQ 跑起来）
+    if (isSmall && ct.running && !q.qr) {
+      clearTimeout(qqQrTimer);
+      let tries = 0;
+      const wait = async () => {
+        try {
+          if (!$('#qqQrWait') || S.page !== 'autopilot') return; // 页面走了就别再查
+          const r = await api('/api/qq');
+          if (r.qr) { qqRender(r); return; }
+          if (++tries >= 20) { const el = $('#qqQrWait'); if (el) el.textContent = '还没等到二维码。点「重启换张码」，或者打开 WebUI 看看容器里 QQ 的状态。'; return; }
+          qqQrTimer = setTimeout(wait, 4000);
+        } catch { /* 面板重启或网络抖一下就下次再来 */ }
+      };
+      qqQrTimer = setTimeout(wait, 4000);
+    }
+  };
   api('/api/qq').then(qqRender).catch(() => {});
   $('#qqTest').onclick = (e) => busy(e.target, async () => {
     await save();
     await new Promise((r) => setTimeout(r, 1500)); // 刚改设置的话等它连上
     await api('/api/qq/test', {});
-    toast('发出去了，看看 QQ');
+    toast('发出去了，去看看');
     qqRender(await api('/api/qq'));
   });
   $('#qqImport').onclick = (e) => busy(e.target, async () => {

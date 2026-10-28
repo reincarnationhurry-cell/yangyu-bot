@@ -130,7 +130,7 @@ export function status() {
   let why = '';
   if (direct()) {
     ready = qq.connected();
-    why = ready ? '' : 'QQ 小号没连上（看看 QQ 和 NapCat 开着没）';
+    why = ready ? '' : readConfig().qq.mode === 'telegram' ? 'Telegram 没连上（看看代理开着没）' : 'QQ 小号没连上（看看 QQ 和 NapCat 开着没）';
   } else try {
     const c = credentials();
     ready = !!(c.appId && c.secret && c.openId);

@@ -107,20 +107,29 @@ export function speakable(text) {
   return /[\u4e00-\u9fa5]/.test(said) ? said : null;
 }
 
+/** mp3 → Telegram 语音条要的 ogg opus */
+export function toOgg(mp3) {
+  return tmp((dir) => {
+    writeFileSync(join(dir, 'v.mp3'), mp3);
+    execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', join(dir, 'v.mp3'), '-ac', '1', '-c:a', 'libopus', '-b:a', '32k', join(dir, 'v.ogg')], { timeout: 30000 });
+    return readFileSync(join(dir, 'v.ogg'));
+  });
+}
+
 // ─── 听 ────────────────────────────────────────────────────
 export const canHear = () => !!bin('mlx_whisper');
 
-/** mp3 → 听写出来的文字；听不了 / 没听清返回 '' */
-export async function transcribe(mp3) {
+/** 一段音频（QQ 给的 mp3、Telegram 的 ogg 都行，ffmpeg 自己认）→ 听写出来的文字；听不了 / 没听清返回 '' */
+export async function transcribe(mp3, ext = 'mp3') {
   const whisper = bin('mlx_whisper');
   if (!whisper) return '';
   const dir = mkdtempSync(join(tmpdir(), 'yy-hear-'));
   try {
-    writeFileSync(join(dir, 'a.mp3'), mp3);
+    writeFileSync(join(dir, `a.${ext}`), mp3);
     // 模型下过了就别再去 Hugging Face 问一遍
     const cached = existsSync(join(homedir(), '.cache/huggingface/hub', `models--${ASR_MODEL.replace('/', '--')}`));
     await run(whisper, [
-      join(dir, 'a.mp3'), '--model', ASR_MODEL, '--language', 'zh', '--initial-prompt', '以下是普通话的句子。',
+      join(dir, `a.${ext}`), '--model', ASR_MODEL, '--language', 'zh', '--initial-prompt', '以下是普通话的句子。',
       '--output-format', 'txt', '--output-dir', dir, '--verbose', 'False',
     ], {
       timeout: 60000,

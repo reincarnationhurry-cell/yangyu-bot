@@ -468,6 +468,11 @@ const routes = {
     const r = await social.checkInbox({ essential: true });
     bust('unread', 'replyFeed');
     return { note: r.note, social: social.socialView() };
+  'GET /api/memory/graph': async () => ({
+    memories: memory.graphData(),
+    facts: owner.readFacts().map((f) => ({ id: f.id, kind: f.kind, text: f.text, at: f.at })),
+    consts: { fuzzyR: 0.2, forgetR: Math.exp(-3) },
+  }),
   },
 
   // QQ 提醒

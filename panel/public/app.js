@@ -306,7 +306,7 @@ function renderMemories(box, mem) {
         <button class="btn sm ghost" data-memedit="${esc(e.id)}" title="改这条">✎</button>
         <button class="btn sm ghost" data-memdel="${esc(e.id)}" title="删掉这条">✕</button></li>`).join('')}</ul>`
     : '<div class="empty">还什么都没记</div>';
-  box.insertAdjacentHTML('beforeend', `<div class="row" style="margin-top:6px"><button class="btn sm ghost" id="memTidy">现在整理一下</button><span class="small muted">每晚睡前反思完会自己整理：零碎的合成印象，清楚度掉到 20% 先记模糊，掉到 5% 忘掉（隔一阵被想起一次的、印象深的记得最牢）</span></div>`);
+  box.insertAdjacentHTML('beforeend', `<div class="row" style="margin-top:6px"><button class="btn sm ghost" id="memTidy">现在整理一下</button><a class="btn sm ghost" href="/brain.html" target="_blank" rel="noopener">🧠 看脑图</a><span class="small muted">每晚睡前反思完会自己整理：零碎的合成印象，清楚度掉到 20% 先记模糊，掉到 5% 忘掉（隔一阵被想起一次的、印象深的记得最牢）</span></div>`);
   $('#memTidy', box).onclick = (ev) => busy(ev.target, async () => {
     const r = await api('/api/memory/tidy', {});
     const x = r.result || {};

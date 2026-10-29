@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>肥鱼的脑图</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+<style>
+  /* 脑图永远是夜空，不跟面板的深浅色走 */
+  :root { --bg: #050913; --text: #e6edf7; --muted: #7d8aa5; --line: rgba(140, 170, 220, .14); --panel: rgba(10, 16, 30, .72); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: default; }
+  .hud { position: fixed; pointer-events: none; }
+  .hud > * { pointer-events: auto; }
+  #head { top: 22px; left: 26px; max-width: 520px; }
+  #head h1 { margin: 0; font-size: 26px; letter-spacing: 3px; font-weight: 600;
+    background: linear-gradient(90deg, #8ec5ff, #c4a7ff 55%, #ff9ccf); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  #head h1 small { font-size: 14px; letter-spacing: 1px; margin-left: 8px; color: var(--muted); -webkit-text-fill-color: var(--muted); }
+  #head p { margin: 6px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+  #stats { margin-top: 8px; font-size: 12px; color: #a9b6cf; letter-spacing: .5px; }
+  #legend { top: 150px; left: 26px; font-size: 12px; line-height: 2; }
+  #legend div { display: flex; align-items: center; gap: 8px; cursor: pointer; color: #b9c4d8; opacity: .9; }
+  #legend div:hover, #legend div.on { opacity: 1; color: #fff; }
+  #legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px currentColor; }
+  #legend b { font-weight: 400; color: var(--muted); margin-left: auto; padding-left: 14px; font-variant-numeric: tabular-nums; }
+  #keyhint { margin-top: 12px; color: var(--muted); line-height: 1.8; font-size: 11px; }
+  #time { left: 50%; bottom: 22px; transform: translateX(-50%); width: min(620px, calc(100% - 32px));
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; backdrop-filter: blur(8px); }
+  #time .row { display: flex; align-items: center; gap: 12px; }
+  #time input { flex: 1; accent-color: #9b8cff; }
+  #time button { background: rgba(155, 140, 255, .16); color: #d9d2ff; border: 1px solid rgba(155, 140, 255, .4);
+    border-radius: 8px; padding: 4px 10px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  #time button:hover { background: rgba(155, 140, 255, .3); }
+  #ffLabel { font-size: 12px; color: #c9d3e6; min-width: 72px; font-variant-numeric: tabular-nums; }
+  #ffNote { margin-top: 6px; font-size: 12px; color: var(--muted); min-height: 1.6em; }
+  #corner { top: 22px; right: 26px; display: flex; gap: 8px; }
+  #corner button { background: var(--panel); color: #c9d3e6; border: 1px solid var(--line); border-radius: 8px;
+    padding: 5px 10px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  #tip { position: fixed; pointer-events: none; max-width: 300px; background: rgba(8, 13, 26, .94); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 11px; font-size: 12px; line-height: 1.65; opacity: 0; transition: opacity .12s; z-index: 5; }
+  #tip .k { font-size: 11px; margin-bottom: 3px; }
+  #tip .m { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  #err { position: fixed; inset: 0; display: none; place-items: center; color: var(--muted); font-size: 14px; }
+  @media (max-width: 720px) {
+    #head { top: 14px; left: 16px; right: 16px; }
+    #head h1 { font-size: 20px; }
+    #head p { display: none; }
+    #legend { display: none; } /* 手机上脑区名字已经标在图上了 */
+    #corner { top: auto; bottom: 120px; right: 16px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div class="hud" id="head">
+  <h1>肥鱼的记忆<small>脑图</small></h1>
+  <p>每颗星是一段她记得的事。越亮越清楚，越大越重要，发光的是印象深的；模糊的是快记不清了的。
+    记忆按「多久没想起」沿遗忘曲线变淡，被想起一次就更牢。连线：同一个 UP 主、同一个人。</p>
+  <div id="stats">读取中…</div>
+</div>
+<div class="hud" id="legend"></div>
+<div class="hud" id="corner">
+  <button id="maskBtn" title="关于号主的事默认打码，截图更安心">关于你：已打码</button>
+  <button id="labelBtn">名字：显示</button>
+</div>
+<div class="hud" id="time">
+  <div class="row">
+    <button id="playBtn">▶ 快进</button>
+    <input type="range" id="ff" min="0" max="90" step="0.5" value="0">
+    <span id="ffLabel">此刻</span>
+  </div>
+  <div id="ffNote">拖一拖：如果接下来这些天谁都没提起，她会记得多少</div>
+</div>
+<div id="tip"></div>
+<div id="err"></div>
+<script>
+(() => {
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const tip = document.getElementById('tip');
+  const $ = (id) => document.getElementById(id);
+
+  // 脑区：位置是相对椭圆的比例，名字是比喻
+  const REGIONS = {
+    gist:    { name: '新皮层 · 印象',       sub: '零碎的事合成一句', color: '#ff8ccf', at: [0.02, -0.86] },
+    self:    { name: '前额叶 · 反思',       sub: '睡前想自己',       color: '#ffad5c', at: [-0.66, -0.62] },
+    facts:   { name: '语义记忆 · 关于你',   sub: '不会忘',           color: '#ff6b7d', at: [-0.96, 0.08] },
+    chat:    { name: '边缘系统 · 跟你聊天', sub: '每晚记一句',       color: '#ffd166', at: [-0.52, 0.78] },
+    session: { name: '海马体 · 每轮印象',   sub: '刷完一轮',         color: '#b69cff', at: [0.12, 0.84] },
+    social:  { name: '社交脑 · 评论区',     sub: '跟谁聊过',         color: '#3ee0a6', at: [0.76, 0.6] },
+    watch:   { name: '视觉皮层 · 看过的',   sub: '每个视频一条',     color: '#4cc9f0', at: [0.8, -0.38] },
+  };
+  const ORDER = ['watch', 'session', 'gist', 'social', 'chat', 'self', 'facts'];
+  const ENT = '#ffe7a3';
+  const MASK_KINDS = new Set(['facts', 'chat']);
+
+  let W = 0, H = 0, DPR = 1, cx = 0, cy = 0, rx = 0, ry = 0;
+  let nodes = [], links = [], hubs = {}, core = null, mems = [], ents = [];
+  let consts = { fuzzyR: 0.2, forgetR: Math.exp(-3) };
+  let ff = 0, focus = null, hover = null, masked = true, showNames = true;
+  const pulses = [];
+  const stars = Array.from({ length: 260 }, () => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.1 + 0.2, a: Math.random() * 0.5 + 0.1, p: Math.random() * 6 }));
+  const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+
+  // ─── 遗忘曲线：跟 memory.mjs 一样 ─────────────────────────
+  const R = (m) => (m.kind === 'facts' ? 1 : Math.exp(-(m.idle + ff) / m.S));
+  const stateOf = (m) => {
+    if (m.kind === 'facts') return 'keep';
+    const r = R(m);
+    if (m.kind === 'self') return r < consts.fuzzyR ? 'faint' : 'clear';
+    if (r < consts.forgetR) return 'gone';
+    if (m.fuzzy || r < consts.fuzzyR) return 'fuzzy';
+    return 'clear';
+  };
+
+  // ─── 搭图 ────────────────────────────────────────────────
+  function build(data) {
+    consts = data.consts || consts;
+    const list = [
+      ...data.memories,
+      ...data.facts.map((f) => ({ id: 'f' + f.id, kind: 'facts', text: f.text, factKind: f.kind, ago: f.at, imp: 4, emo: 0, S: 1e9, idle: 0, n: 0, keys: [] })),
+    ].filter((m) => REGIONS[m.kind]);
+
+    core = { type: 'core', label: '她 · 此刻', x: 0, y: 0, r: 7, color: '#ffffff', fixed: true };
+    nodes = [core];
+    hubs = {};
+    for (const k of ORDER) {
+      hubs[k] = { type: 'hub', kind: k, label: REGIONS[k].name, sub: REGIONS[k].sub, color: REGIONS[k].color, r: 5, fixed: true, count: 0 };
+      nodes.push(hubs[k]);
+    }
+    // UP 主 / 同一个人：出现两次以上才单独成一颗
+    const byKey = new Map();
+    for (const m of list) for (const k of m.keys || []) {
+      if (!k.startsWith('up:') && !k.startsWith('uid:')) continue;
+      if (!byKey.has(k)) byKey.set(k, []);
+      byKey.get(k).push(m);
+    }
+    const nameOf = (k, ms) => {
+      if (k.startsWith('up:')) return k.slice(3);
+      const plain = new Map();
+      for (const m of ms) if (m.kind === 'social') for (const x of m.keys) if (!x.includes(':')) plain.set(x, (plain.get(x) || 0) + 1);
+      return [...plain].sort((a, b) => b[1] - a[1])[0]?.[0] || '某个人';
+    };
+    ents = [...byKey].filter(([, ms]) => ms.length >= 2).sort((a, b) => b[1].length - a[1].length).slice(0, 48)
+      .map(([k, ms], rank) => ({ type: 'ent', key: k, rank, label: nameOf(k, ms), person: k.startsWith('uid:'), members: ms, r: 2 + Math.min(4, ms.length * 0.5), color: ENT }));
+    const entOf = new Map(ents.map((e) => [e.key, e]));
+
+    mems = list.map((m) => {
+      const hub = hubs[m.kind];
+      hub.count++;
+      return { type: 'mem', ...m, hub, color: hub.color, jitter: Math.random() * 26, tw: Math.random() * 6.28 };
+    });
+    nodes.push(...ents, ...mems);
+
+    links = [];
+    for (const k of ORDER) links.push({ a: core, b: hubs[k], core: true });
+    for (const m of mems) {
+      links.push({ a: m, b: m.hub, hubLink: true });
+      for (const k of m.keys || []) { const e = entOf.get(k); if (e) links.push({ a: m, b: e, ent: true }); }
+    }
+    for (const e of ents) e.hub = mostHub(e.members);
+
+    layoutFixed();
+    const rnd = () => (Math.random() - 0.5);
+    for (const n of nodes) if (!n.fixed) {
+      const h = n.type === 'ent' ? n.hub : n.hub;
+      n.x = h.x + rnd() * 90; n.y = h.y + rnd() * 90; n.vx = 0; n.vy = 0;
+    }
+    for (let i = 0; i < 320; i++) tick(1 - i / 360);
+    renderLegend();
+    updateStats();
+  }
+  const mostHub = (ms) => {
+    const c = {};
+    for (const m of ms) c[m.kind] = (c[m.kind] || 0) + 1;
+    return hubs[Object.entries(c).sort((a, b) => b[1] - a[1])[0][0]];
+  };
+
+  function layoutFixed() {
+    const narrow = W < 720;
+    cx = narrow ? W * 0.5 : W * 0.56;
+    cy = narrow ? H * 0.46 : H * 0.5;
+    rx = narrow ? W * 0.38 : Math.min(W * 0.33, H * 0.62);
+    ry = narrow ? H * 0.3 : H * 0.34;
+    core.x = cx - rx * 0.05; core.y = cy - ry * 0.05;
+    for (const k of ORDER) { const [a, b] = REGIONS[k].at; hubs[k].x = cx + a * rx * (narrow ? 0.72 : 1); hubs[k].y = cy + b * ry; }
+  }
+
+  // ─── 力导向：同脑区的聚成一团，越淡的漂得越远 ─────────────
+  function tick(alpha) {
+    const free = nodes.filter((n) => !n.fixed);
+    const scale = Math.min(1, Math.max(0.4, Math.min(W, H) / 900));
+    for (let i = 0; i < free.length; i++) {
+      const a = free[i];
+      for (let j = i + 1; j < free.length; j++) {
+        const b = free[j];
+        let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy;
+        if (d2 > 3600) continue;
+        if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+        const f = (((a.kind === 'watch' && b.kind === 'watch') ? 55 : 95) * scale * alpha) / d2;
+        a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+      }
+    }
+    for (const l of links) {
+      if (l.core) continue;
+      const { a, b } = l;
+      let len, k;
+      if (l.hubLink) {
+        const r = R(a);
+        len = (22 + 120 * (1 - r) + a.jitter) * scale * (a.kind === 'watch' ? 0.75 : 1);
+        k = 0.05;
+        if (stateOf(a) === 'gone') len = 230 * scale;
+      } else { len = 34 * scale; k = 0.012; }
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+      const f = ((d - len) / d) * k * alpha;
+      if (!a.fixed) { a.vx += dx * f; a.vy += dy * f; }
+      if (!b.fixed) { b.vx -= dx * f; b.vy -= dy * f; }
+    }
+    for (const e of ents) { e.vx += (e.hub.x - e.x) * 0.004 * alpha; e.vy += (e.hub.y - e.y) * 0.004 * alpha; }
+    for (const n of free) {
+      n.vx *= 0.62; n.vy *= 0.62;
+      n.x += n.vx; n.y += n.vy;
+      n.x = Math.max(12, Math.min(W - 12, n.x)); n.y = Math.max(12, Math.min(H - 12, n.y));
+    }
+  }
+
+  // ─── 画 ──────────────────────────────────────────────────
+  let t0 = performance.now();
+  function frame(now) {
+    const t = (now - t0) / 1000;
+    tick(0.05);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    // 夜空
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.8);
+    g.addColorStop(0, '#0d1630'); g.addColorStop(0.55, '#070c1b'); g.addColorStop(1, '#03050c');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    for (const s of stars) {
+      ctx.globalAlpha = s.a * (0.6 + 0.4 * Math.sin(t * 0.7 + s.p));
+      ctx.fillStyle = '#9fb3dc';
+      ctx.beginPath(); ctx.arc(s.x * W, s.y * H, s.r, 0, 6.283); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    // 大脑的轮廓，淡淡一层
+    ctx.strokeStyle = 'rgba(130,160,255,.07)'; ctx.lineWidth = 1; ctx.setLineDash([2, 6]);
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx * 1.18, ry * 1.22, 0, 0, 6.283); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx * 0.62, ry * 0.6, 0, 0, 6.283); ctx.stroke();
+    ctx.setLineDash([]);
+
+    const inFocus = (n) => !focus || n === focus || (n.type === 'mem' && (n.hub === focus || (focus.type === 'ent' && focus.members.includes(n))))
+      || (n.type === 'hub' && focus.type === 'hub' && n === focus) || (n.type === 'ent' && focus.type === 'hub' && n.hub === focus);
+
+    // 连线
+    ctx.globalCompositeOperation = 'lighter';
+    for (const l of links) {
+      const { a, b } = l;
+      if (l.core) {
+        ctx.strokeStyle = hexA(b.color, focus && focus !== b ? 0.05 : 0.22); ctx.lineWidth = 1.2;
+      } else {
+        const st = stateOf(a);
+        if (st === 'gone') continue;
+        const r = R(a);
+        const on = inFocus(a);
+        const base = l.ent ? 0.16 : 0.05 + 0.14 * r;
+        ctx.strokeStyle = l.ent ? hexA(ENT, (on ? base : base * 0.15) * (st === 'fuzzy' ? 0.4 : 1)) : hexA(a.color, on ? base : base * 0.15);
+        ctx.lineWidth = l.ent ? 0.7 : 0.6;
+      }
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+
+    // 记忆
+    for (const m of mems) {
+      const st = stateOf(m);
+      const r = R(m);
+      let alpha = st === 'gone' ? Math.max(0, 0.08 - (consts.forgetR - r) * 2) : st === 'faint' ? 0.35 : 0.22 + 0.78 * r;
+      if (!inFocus(m)) alpha *= 0.12;
+      if (alpha <= 0.005) continue;
+      const tw = 0.85 + 0.15 * Math.sin(t * 1.6 + m.tw);
+      const size = (1.3 + m.imp * 0.62) * (m === hover ? 1.8 : 1);
+      if (st === 'fuzzy') {
+        // 记模糊了：一团雾，没有清楚的边
+        const rg = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, size * 4.2);
+        rg.addColorStop(0, hexA(m.color, 0.3 * alpha * tw)); rg.addColorStop(1, hexA(m.color, 0));
+        ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(m.x, m.y, size * 4.2, 0, 6.283); ctx.fill();
+        continue;
+      }
+      const glow = size * (2.4 + m.emo * 4.5);
+      const rg = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, glow);
+      rg.addColorStop(0, hexA(m.color, 0.55 * alpha * tw)); rg.addColorStop(0.35, hexA(m.color, 0.16 * alpha * tw)); rg.addColorStop(1, hexA(m.color, 0));
+      ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(m.x, m.y, glow, 0, 6.283); ctx.fill();
+      ctx.fillStyle = hexA('#ffffff', 0.85 * alpha * tw);
+      ctx.beginPath(); ctx.arc(m.x, m.y, size * 0.55, 0, 6.283); ctx.fill();
+      if (m.emo >= 0.5 && alpha > 0.3) {
+        ctx.strokeStyle = hexA(m.color, 0.5 * alpha * (0.6 + 0.4 * Math.sin(t * 2.4 + m.tw)));
+        ctx.lineWidth = 0.8; ctx.beginPath(); ctx.arc(m.x, m.y, size * 1.9, 0, 6.283); ctx.stroke();
+      }
+    }
+
+    // 想起：光点从一段记忆流回脑区、再流回「她」
+    if (Math.random() < 0.35) spawnPulse();
+    for (let i = pulses.length - 1; i >= 0; i--) {
+      const p = pulses[i];
+      p.t += p.speed;
+      if (p.t >= 1) {
+        pulses.splice(i, 1);
+        if (p.next) pulses.push({ a: p.b, b: p.next, t: 0, speed: 0.022, color: p.color });
+        continue;
+      }
+      const x = p.a.x + (p.b.x - p.a.x) * p.t, y = p.a.y + (p.b.y - p.a.y) * p.t;
+      const rg = ctx.createRadialGradient(x, y, 0, x, y, 7);
+      rg.addColorStop(0, hexA('#ffffff', 0.9)); rg.addColorStop(0.3, hexA(p.color, 0.6)); rg.addColorStop(1, hexA(p.color, 0));
+      ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(x, y, 7, 0, 6.283); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    // UP 主 / 人
+    ctx.textAlign = 'center';
+    for (const e of ents) {
+      const alive = e.members.filter((m) => stateOf(m) !== 'gone').length;
+      if (!alive) continue;
+      const on = inFocus(e);
+      ctx.globalAlpha = on ? 1 : 0.15;
+      ctx.strokeStyle = hexA(ENT, 0.75); ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (e.person) ctx.arc(e.x, e.y, e.r, 0, 6.283);
+      else { ctx.moveTo(e.x, e.y - e.r - 1); ctx.lineTo(e.x + e.r + 1, e.y); ctx.lineTo(e.x, e.y + e.r + 1); ctx.lineTo(e.x - e.r - 1, e.y); ctx.closePath(); }
+      ctx.stroke();
+      if (showNames && on && (focus ? focus === e || focus.type === 'hub' : e.rank < 10)) {
+        ctx.font = '10px "PingFang SC", sans-serif';
+        ctx.fillStyle = hexA(ENT, 0.7);
+        ctx.fillText(short(e.label, 10), e.x, e.y - e.r - 5);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // 脑区
+    for (const k of ORDER) {
+      const h = hubs[k];
+      if (!h.count) continue;
+      const on = !focus || focus === h;
+      const pr = 1 + 0.08 * Math.sin(t * 1.3 + h.x);
+      const rg = ctx.createRadialGradient(h.x, h.y, 0, h.x, h.y, 34 * pr);
+      rg.addColorStop(0, hexA(h.color, on ? 0.45 : 0.1)); rg.addColorStop(1, hexA(h.color, 0));
+      ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(h.x, h.y, 34 * pr, 0, 6.283); ctx.fill();
+      ctx.strokeStyle = hexA(h.color, on ? 0.9 : 0.25); ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(h.x, h.y, 6.5, 0, 6.283); ctx.stroke();
+      ctx.fillStyle = hexA('#ffffff', on ? 0.95 : 0.3);
+      ctx.beginPath(); ctx.arc(h.x, h.y, 2.6, 0, 6.283); ctx.fill();
+      ctx.font = `600 ${W < 720 ? 12 : 15}px "PingFang SC", sans-serif`;
+      ctx.fillStyle = hexA(h.color, on ? 1 : 0.3);
+      ctx.shadowColor = h.color; ctx.shadowBlur = on ? 12 : 0;
+      ctx.fillText(h.label, h.x, h.y - 16);
+      ctx.shadowBlur = 0;
+      if (W >= 720) {
+        ctx.font = '11px "PingFang SC", sans-serif';
+        ctx.fillStyle = hexA('#c8d2e8', on ? 0.6 : 0.2);
+        ctx.fillText(`${h.sub} · ${aliveCount(k)}`, h.x, h.y + 22);
+      }
+    }
+    // 她
+    const cr = 1 + 0.12 * Math.sin(t * 2);
+    const cg = ctx.createRadialGradient(core.x, core.y, 0, core.x, core.y, 46 * cr);
+    cg.addColorStop(0, 'rgba(255,255,255,.75)'); cg.addColorStop(0.2, 'rgba(170,190,255,.35)'); cg.addColorStop(1, 'rgba(120,140,255,0)');
+    ctx.fillStyle = cg; ctx.beginPath(); ctx.arc(core.x, core.y, 46 * cr, 0, 6.283); ctx.fill();
+    ctx.font = '600 13px "PingFang SC", sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,.92)';
+    ctx.fillText(core.label, core.x, core.y + 30);
+
+    requestAnimationFrame(frame);
+  }
+  const short = (s, n) => (s.length > n ? s.slice(0, n) + '…' : s);
+  const aliveCount = (k) => mems.filter((m) => m.kind === k && stateOf(m) !== 'gone').length;
+
+  function spawnPulse() {
+    const alive = mems.filter((m) => stateOf(m) === 'clear' && (!focus || m.hub === focus || (focus.type === 'ent' && focus.members.includes(m))));
+    if (!alive.length || pulses.length > 40) return;
+    // 越清楚、越重要的越常被想起
+    let tot = 0;
+    const w = alive.map((m) => (tot += R(m) * m.imp));
+    const x = Math.random() * tot;
+    const m = alive[w.findIndex((v) => v >= x)];
+    pulses.push({ a: m, b: m.hub, next: core, t: 0, speed: 0.03 + Math.random() * 0.02, color: m.color });
+  }
+
+  // ─── 交互 ────────────────────────────────────────────────
+  function pick(x, y) {
+    let best = null, bd = 14 * 14;
+    for (const n of nodes) {
+      if (n.type === 'mem' && stateOf(n) === 'gone') continue;
+      const d = (n.x - x) ** 2 + (n.y - y) ** 2;
+      const lim = n.type === 'hub' ? 26 * 26 : n.type === 'core' ? 30 * 30 : bd;
+      if (d < lim && (!best || d < best.d)) best = { n, d };
+    }
+    return best?.n || null;
+  }
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  function showTip(n, x, y) {
+    if (!n) { tip.style.opacity = 0; return; }
+    let html;
+    if (n.type === 'mem') {
+      const st = stateOf(n), r = R(n);
+      const reg = REGIONS[n.kind];
+      const hide = masked && MASK_KINDS.has(n.kind);
+      const text = hide ? '（关于号主的事，已打码）' : n.text;
+      const tags = [
+        n.kind === 'facts' ? (n.factKind || '') + ' · 不会忘' : `还记得 ${Math.round(r * 100)}%`,
+        n.kind !== 'facts' && `稳定度 ${n.S >= 100 ? Math.round(n.S) : n.S.toFixed(1)} 天`,
+        n.n && `想起过 ${n.n} 次`, n.from && `${n.from} 条合成的`,
+        n.emo >= 0.5 && '印象深', st === 'fuzzy' && '记模糊了', st === 'gone' && '忘掉了',
+      ].filter(Boolean).join(' · ');
+      html = `<div class="k" style="color:${reg.color}">${reg.name} · ${esc(n.ago)}</div>${esc(text)}<div class="m">${tags}</div>`;
+    } else if (n.type === 'hub') {
+      html = `<div class="k" style="color:${n.color}">${n.label}</div>${n.sub}，现在记得 ${aliveCount(n.kind)} 条<div class="m">点一下只看这一区</div>`;
+    } else if (n.type === 'ent') {
+      html = `<div class="k" style="color:${ENT}">${n.person ? '评论区的人' : 'UP 主'}</div>${esc(n.label)}<div class="m">${n.members.length} 段记忆连着 · 点一下高亮</div>`;
+    } else {
+      html = `<div class="k">她</div>所有想起来的事，最后都流回这里`;
+    }
+    tip.innerHTML = html;
+    tip.style.opacity = 1;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    tip.style.left = Math.min(W - tw - 10, x + 14) + 'px';
+    tip.style.top = Math.min(H - th - 10, y + 14) + 'px';
+  }
+  cv.addEventListener('mousemove', (e) => { hover = pick(e.clientX, e.clientY); cv.style.cursor = hover ? 'pointer' : 'default'; showTip(hover, e.clientX, e.clientY); });
+  cv.addEventListener('mouseleave', () => { hover = null; showTip(null); });
+  cv.addEventListener('click', (e) => {
+    const n = pick(e.clientX, e.clientY);
+    focus = n && (n.type === 'hub' || n.type === 'ent') && focus !== n ? n : n?.type === 'mem' ? focus : null;
+    renderLegend();
+  });
+
+  function renderLegend() {
+    $('legend').innerHTML = ORDER.filter((k) => hubs[k]?.count).map((k) => `<div data-k="${k}" class="${focus === hubs[k] ? 'on' : ''}"><i style="color:${REGIONS[k].color};background:${REGIONS[k].color}"></i>${REGIONS[k].name}<b>${aliveCount(k)}</b></div>`).join('')
+      + `<div style="cursor:default"><i style="color:${ENT};border:1px solid ${ENT};background:none;border-radius:2px;transform:rotate(45deg);width:7px;height:7px"></i>UP 主 / 评论区的人<b>${ents.length}</b></div>`
+      + '<div id="keyhint">点脑区、点名字：只看那一块<br>悬停：看这段记忆和还记得几成</div>';
+    for (const d of document.querySelectorAll('#legend [data-k]')) d.onclick = () => { const h = hubs[d.dataset.k]; focus = focus === h ? null : h; renderLegend(); };
+  }
+
+  function updateStats() {
+    const st = mems.map(stateOf);
+    const live = mems.filter((m, i) => st[i] !== 'gone' && m.kind !== 'facts');
+    const avg = live.length ? Math.round((live.reduce((s, m) => s + R(m), 0) / live.length) * 100) : 0;
+    const fuzzy = st.filter((s) => s === 'fuzzy').length, gone = st.filter((s) => s === 'gone').length;
+    const deep = live.filter((m) => m.emo >= 0.5).length;
+    const linkN = links.filter((l) => !l.core && stateOf(l.a) !== 'gone').length;
+    $('stats').textContent = `记忆 ${mems.length - gone} · 连线 ${linkN} · 印象深 ${deep} · 记模糊 ${fuzzy} · 平均清楚度 ${avg}%`;
+    if (ff > 0) {
+      const fuzzyNow = mems.filter((m) => m.fuzzy).length;
+      $('ffNote').textContent = `如果接下来 ${ff} 天谁都没提起：还清楚 ${st.filter((s) => s === 'clear').length} 条，记模糊 ${fuzzy} 条${fuzzyNow ? `（本来就模糊 ${fuzzyNow}）` : ''}，忘掉 ${gone} 条。关于你的 ${mems.filter((m) => m.kind === 'facts').length} 条不会忘。`;
+    } else {
+      $('ffNote').textContent = '拖一拖：如果接下来这些天谁都没提起，她会记得多少';
+    }
+  }
+
+  // 快进
+  $('ff').oninput = (e) => { ff = Number(e.target.value); $('ffLabel').textContent = ff ? `+${ff} 天` : '此刻'; updateStats(); renderLegend(); };
+  let playing = null;
+  $('playBtn').onclick = () => {
+    if (playing) { cancelAnimationFrame(playing); playing = null; $('playBtn').textContent = '▶ 快进'; return; }
+    if (ff >= 90) ff = 0;
+    $('playBtn').textContent = '❚❚ 暂停';
+    const step = () => {
+      ff = Math.min(90, Math.round((ff + 0.25) * 4) / 4);
+      $('ff').value = ff; $('ff').oninput({ target: { value: ff } });
+      if (ff < 90) playing = requestAnimationFrame(step); else { playing = null; $('playBtn').textContent = '↺ 重来'; }
+    };
+    playing = requestAnimationFrame(step);
+  };
+  $('maskBtn').onclick = () => { masked = !masked; $('maskBtn').textContent = masked ? '关于你：已打码' : '关于你：显示中'; };
+  $('labelBtn').onclick = () => { showNames = !showNames; $('labelBtn').textContent = showNames ? '名字：显示' : '名字：隐藏'; };
+
+  function resize() {
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = innerWidth; H = innerHeight;
+    cv.width = W * DPR; cv.height = H * DPR;
+    if (core) { layoutFixed(); for (let i = 0; i < 80; i++) tick(0.6); }
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  fetch('/api/memory/graph').then((r) => r.json()).then((d) => {
+    if (d.error) throw new Error(d.error);
+    build(d);
+    requestAnimationFrame(frame);
+  }).catch((e) => { $('err').style.display = 'grid'; $('err').textContent = '读不到她的记忆：' + e.message; });
+})();
+</script>
+</body>
+</html>

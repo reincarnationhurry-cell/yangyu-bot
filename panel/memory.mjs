@@ -197,6 +197,15 @@ export function memoryView(n = 30) {
   return { total: all.length, recent: all.slice(-n).reverse().map((e) => ({ ...e, R: e.kind === 'self' ? 1 : retention(e, now) })) };
 }
 
+/** 给脑图：每条带上稳定度、离上次想起几天，前端拖「快进」时自己按曲线算清楚度 */
+export function graphData(now = Date.now()) {
+  return load().map((e) => ({
+    id: e.id, kind: e.kind, text: e.text, ts: e.ts, ago: ago(e.ts, now), imp: e.imp, emo: e.emo || 0,
+    fuzzy: !!e.fuzzy, n: e.n || 0, from: e.from || 0, keys: e.keys,
+    S: Math.round(stability(e) * 10) / 10, idle: Math.round(idleDays(e, now) * 100) / 100,
+  }));
+}
+
 /** 你在面板里改：记错了的改正文、调重要程度。改过的算她刚想起来；调了重要程度，稳定度按比例跟着变 */
 export function update(id, { text, imp } = {}) {
   const all = load();

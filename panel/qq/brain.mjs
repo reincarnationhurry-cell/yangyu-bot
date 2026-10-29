@@ -122,7 +122,7 @@ export async function runTool(name, args, out) {
     }
     case 'recall': {
       const q = String(a.query || '');
-      const mine = memory.recall(q, { keys: [`up:${q}`, q], k: 5 }).map((e) => `- ${memory.ago(e.ts)}：${e.text}`);
+      const mine = memory.recall(q, { keys: [`up:${q}`, q], k: 5 }).map(memory.memLine);
       const said = owner.readChat().filter((e) => e.text && e.kind !== 'reset' && owner.overlap(e.text, q) > 0.3).slice(-5)
         .map((e) => `- ${memory.ago(e.ts)}${e.from === 'owner' ? '他说' : '我说'}：${e.text.slice(0, 80)}`);
       return [...mine, ...said].join('\n') || `想不起来跟「${q}」有关的事`;

@@ -114,14 +114,15 @@ export async function digestToday({ today = localDate(), remember } = {}) {
 输出：
 {"facts":[{"kind":"${KINDS.join('/')}","text":"关于他的、以后还用得上的事，一句话，第三人称（比如「他在做国学视频」）"}],
 "fix":[{"id":"上面已记着的某条的 id（不带#）","text":"改成什么；这条不对了就空字符串"}],
-"memory":"第一人称一两句：今天跟他聊了什么、我什么感觉（60字内）"}
+"memory":"第一人称一两句：今天跟他聊了什么、我什么感觉（60字内）",
+"feel":今天聊天心里起伏多大，0平平常常到3特别（吵架了、被他感动了、一起笑疯了）}
 只记新的、确实成立的；随口的玩笑、一次性的闲聊、密码身份证银行卡这类不记。没有就给空数组。` },
   ], { maxTokens: 700, tag: 'qq', essential: true });
   const j = llm.looseJson(out);
   const added = (Array.isArray(j.facts) ? j.facts : []).map((f) => addFact({ text: f.text, kind: f.kind, source: 'nightly' })).filter((f) => f && !f.existed);
   for (const x of Array.isArray(j.fix) ? j.fix : []) if (x?.id) updateFact(x.id, x.text);
   const memo = norm(j.memory);
-  if (memo && remember) remember(memo);
+  if (memo && remember) remember(memo, (Number(j.feel) || 0) / 3);
   return { added: added.length, memory: memo };
 }
 

@@ -365,7 +365,7 @@ async function tick(now = Date.now()) {
   // 每晚整理一次今天的聊天：补记他的事，写一句进她自己的记忆
   if (new Date(now).getHours() >= cfg.mind.reflectHour && st.qqDigestOn !== today && llm.llmReady()) {
     writeState({ ...st, qqDigestOn: today });
-    const r = await owner.digestToday({ today, remember: (t) => memory.add({ kind: 'chat', imp: 3, text: `跟号主聊天：${t}` }) }).catch(() => null);
+    const r = await owner.digestToday({ today, remember: (t, emo) => memory.add({ kind: 'chat', imp: 3, emo, text: `跟号主聊天：${t}` }) }).catch(() => null);
     if (r?.added) logAction({ kind: 'qq', source: 'auto', detail: `🌙 翻了翻今天跟你聊的，多记住了 ${r.added} 件关于你的事` });
     return;
   }

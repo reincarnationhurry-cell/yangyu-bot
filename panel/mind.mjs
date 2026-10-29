@@ -297,7 +297,7 @@ ${seen}
     };
     if (feel.thought) {
       memory.add({
-        kind: 'watch', imp: score,
+        kind: 'watch', imp: score, emo: [0.6, 0, 0, 0.4, 1][score - 1], // 特别喜欢、特别嫌弃的都记得牢，一般般的不算
         text: `看了《${v.title}》（${v.owner}）${feel.heard ? `，里面 ${feel.heard}` : ''}：${feel.thought}`,
         keys: [v.owner && `up:${v.owner}`, `bv:${v.bvid}`, v.tname],
       });
@@ -330,7 +330,7 @@ ${moodHint(m)}
 你自己长出来的兴趣：${m.interests.map((x) => x.kw).join('、') || '（还没有）'}（兴趣要杂一点，别都是同一类的变体）
 
 输出（按这个顺序）：
-{"memory":"第一人称一两句，记下这轮印象最深的（会成为你的记忆，60字内，提具体标题）",
+{"memory":"第一人称一两句，记下这轮印象最深的（会成为你的记忆，60字内，提具体标题）","feel":这轮心里起伏多大，0平平淡淡到3特别有感觉（笑疯了、看哭了、气到了）,
 "mood":"现在的心情，10字内","obsession":"最近着迷的东西（没变就照抄）","thought":"脑子里还转着的一个念头（20字内）","goal":"给自己的小目标，比如想找某类视频、想学个什么（没变就照抄）",
 "add":["想加的新兴趣词，0~2个"],"drop":["腻了的兴趣词，0~1个，只能从你自己长出来的里面挑"],
 "share":{"bvid":"特别想给最熟的人看的那个视频的BV号，没有就空字符串","line":"想对他说的一句话"}}`,
@@ -370,7 +370,7 @@ ${moodHint(m)}
 
   const memoryText = str(j.memory, 120);
   if (memoryText) {
-    memory.add({ kind: 'session', imp: 3, text: memoryText, keys: watched.map((w) => w.owner && `up:${w.owner}`) });
+    memory.add({ kind: 'session', imp: 3, emo: (Number(j.feel) || 0) / 3, text: memoryText, keys: watched.map((w) => w.owner && `up:${w.owner}`) });
     if (cfg.memory) remember(`我（肥鱼）自己刷B站：${memoryText}`);
   }
 
@@ -440,8 +440,8 @@ ${thoughts.slice(-20).join('\n')}
 export async function tidyMemory() {
   try {
     const r = await memory.tidy();
-    if (r.merged || r.forgot) {
-      const parts = [r.merged && `把 ${r.merged} 条零碎的合成了 ${r.into} 条印象`, r.forgot && `忘掉了 ${r.forgot} 条`].filter(Boolean);
+    if (r.merged || r.forgot || r.blurred) {
+      const parts = [r.merged && `把 ${r.merged} 条零碎的合成了 ${r.into} 条印象`, r.blurred && `${r.blurred} 条记模糊了`, r.forgot && `忘掉了 ${r.forgot} 条`].filter(Boolean);
       logAction({ kind: 'mind', source: 'auto', detail: `🧹 整理了一下记忆：${parts.join('，')}（现在记得 ${r.total} 条）`, meta: { gists: r.gists } });
     }
     return r;

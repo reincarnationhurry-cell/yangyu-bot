@@ -302,15 +302,15 @@ function renderMemories(box, mem) {
   const list = mem?.recent || [];
   box.innerHTML = list.length
     ? `<ul class="vip-list">${list.map((e) => `<li><div style="flex:1;min-width:0" class="small">${MEM_KIND[e.kind] || '•'} ${esc(e.text)}
-        <div class="muted">${ago(e.ts)} · 重要 ${e.imp}/5${e.from ? ` · ${e.from} 条合成的` : ''}${e.n ? ` · 想起过 ${e.n} 次` : ''}${e.edited ? ' · 你改过' : ''}</div></div>
+        <div class="muted">${ago(e.ts)} · 重要 ${e.imp}/5${e.R != null && e.kind !== 'self' ? ` · 还记得 ${Math.round(e.R * 100)}%` : ''}${e.fuzzy ? ' · 记模糊了' : ''}${e.emo >= 0.5 ? ' · 印象深' : ''}${e.from ? ` · ${e.from} 条合成的` : ''}${e.n ? ` · 想起过 ${e.n} 次` : ''}${e.edited ? ' · 你改过' : ''}</div></div>
         <button class="btn sm ghost" data-memedit="${esc(e.id)}" title="改这条">✎</button>
         <button class="btn sm ghost" data-memdel="${esc(e.id)}" title="删掉这条">✕</button></li>`).join('')}</ul>`
     : '<div class="empty">还什么都没记</div>';
-  box.insertAdjacentHTML('beforeend', `<div class="row" style="margin-top:6px"><button class="btn sm ghost" id="memTidy">现在整理一下</button><span class="small muted">每晚睡前反思完会自己整理：零碎的合成印象，太久没想起的忘掉</span></div>`);
+  box.insertAdjacentHTML('beforeend', `<div class="row" style="margin-top:6px"><button class="btn sm ghost" id="memTidy">现在整理一下</button><span class="small muted">每晚睡前反思完会自己整理：零碎的合成印象，清楚度掉到 20% 先记模糊，掉到 5% 忘掉（隔一阵被想起一次的、印象深的记得最牢）</span></div>`);
   $('#memTidy', box).onclick = (ev) => busy(ev.target, async () => {
     const r = await api('/api/memory/tidy', {});
     const x = r.result || {};
-    toast(x.merged || x.forgot ? `合并 ${x.merged || 0} 条成 ${x.into || 0} 条，忘掉 ${x.forgot || 0} 条` : '没什么要整理的');
+    toast(x.merged || x.forgot || x.blurred ? `合并 ${x.merged || 0} 条成 ${x.into || 0} 条，${x.blurred || 0} 条记模糊了，忘掉 ${x.forgot || 0} 条` : '没什么要整理的');
     renderMemories(box, r);
   });
   $$('[data-memedit]', box).forEach((b) => (b.onclick = () => {

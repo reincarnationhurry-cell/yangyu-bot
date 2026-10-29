@@ -11,15 +11,14 @@
  *
  * 翻出来的是她自己的经历，不是号主说过的话。
  */
-import { recall, ago, memoryView } from './memory.mjs';
+import { recall, memLine, memoryView } from './memory.mjs';
 
 const args = process.argv.slice(2);
 const n = (() => { const i = args.indexOf('-n'); return i >= 0 ? Math.max(1, Number(args.splice(i, 2)[1]) || 5) : 5; })();
-const fmt = (e) => `- ${ago(e.ts)}：${e.text}`;
 
 if (args[0] === '--recent') {
   const { total, recent } = memoryView(10);
-  console.log(total ? recent.map(fmt).join('\n') : '还什么都没记');
+  console.log(total ? recent.map(memLine).join('\n') : '还什么都没记');
 } else if (!args.length) {
   console.error('用法：node panel/recall.mjs "想起什么" [-n 条数]   或   --recent');
   process.exit(1);
@@ -27,5 +26,5 @@ if (args[0] === '--recent') {
   const q = args.join(' ');
   // 名字、UP 主名常常就是查询本身，顺手当精确线索
   const top = recall(q, { keys: [`up:${q}`, q], k: n });
-  console.log(top.length ? top.map(fmt).join('\n') : `想不起来跟「${q}」有关的事`);
+  console.log(top.length ? top.map(memLine).join('\n') : `想不起来跟「${q}」有关的事`);
 }

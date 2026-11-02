@@ -25,7 +25,9 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-yangyu-panel'
 
@@ -35,8 +37,23 @@ export const inject = ['webServer']
 /** 路由前缀（kind: 'prefix'）：req.url 带完整前缀，自行剥掉。 */
 const ROUTE_PREFIX = '/yangyu-panel'
 
-/** 默认仓库根目录；可在 cordis.patch.yml 的 config.repoRoot 覆盖。 */
-const DEFAULT_REPO_ROOT = '/Users/mikejam/Documents/deepseek-harness/QQ_bot'
+/**
+ * 默认仓库根目录：插件以 `link:` 装进 DSH profile，import.meta.url 解析到的就是仓库里这份
+ * （dsh-plugin/yangyu-panel/index.js 往上两级）。以前写死成号主机器上的绝对路径，换台机器就找不到。
+ * 仍可在 cordis.patch.yml 的 config.repoRoot 覆盖。
+ */
+const DEFAULT_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+/** 跟 panel/install-launchd.sh 同一个规则：com.<当前用户名>.yangyu-panel */
+function defaultLaunchdLabel() {
+  let user = process.env.USER || ''
+  try {
+    user = os.userInfo().username || user
+  } catch {
+    /* 拿不到用户名就用环境变量 */
+  }
+  return `com.${user || 'user'}.yangyu-panel`
+}
 
 /** 内置默认配置：与 ctx 行 config 浅合并，缺字段用默认。 */
 const DEFAULTS = {
@@ -54,7 +71,11 @@ const DEFAULTS = {
   /** 看门狗决定自己拉起前，先让位给已 loaded 的 launchd 任务（防双监督者抢端口）。 */
   respectLaunchd: true,
   /** 让位判据用的 launchd label。 */
-  launchdLabel: 'com.mikejam.yangyu-panel',
+  launchdLabel: defaultLaunchdLabel(),
+  /** launchd loaded 时先等它多久把面板拉起来（毫秒），等不到再兜底自启。 */
+  launchdHandoffMs: 8_000,
+  /** 看门狗连续拉不起来时的最长退避（秒）：周期按 2 的幂翻倍，封顶于此。 */
+  watchdogMaxBackoffSecs: 1_800,
   /** launchctl 可执行文件路径；非 macOS 或非标准安装位置可改，自测里指向假实现。 */
   launchctlBin: '/bin/launchctl',
   /**
@@ -76,8 +97,6 @@ const STOP_GRACE_MS = 8_000
 /** 端口被占但探活不通过时的重试：给并发启动的另一个进程留出就绪时间。 */
 const BUSY_RETRY_MS = 900
 const BUSY_RETRIES = 3
-/** 让位 launchd 时等它拉起的时间窗；超时仍没起来就由插件兜底。 */
-const LAUNCHD_HANDOFF_WAIT_MS = 8_000
 /** 单次启动的总等待上限（与 client 文案、README 对齐）。 */
 const DEFAULT_START_TIMEOUT_MS = 30_000
 
@@ -99,7 +118,20 @@ export function resolveConfig(raw) {
       ? cfg.launchdLabel.trim()
       : DEFAULTS.launchdLabel
   cfg.trustedHosts = normalizeTrustedHosts(cfg.trustedHosts)
+  cfg.launchdHandoffMs = toNonNegativeInt(cfg.launchdHandoffMs, DEFAULTS.launchdHandoffMs)
+  cfg.watchdogMaxBackoffSecs = toNonNegativeInt(cfg.watchdogMaxBackoffSecs, DEFAULTS.watchdogMaxBackoffSecs)
   return cfg
+}
+
+/**
+ * 看门狗退避：连续 fails 次没拉起来后，下一次至少隔多久（毫秒）。
+ * 面板一启动就崩（配置错之类，不是端口问题）时，固定 30 秒重拉会让日志无限增长；
+ * 改成 secs·2^fails，封顶 maxSecs。fails=0 就是正常周期。
+ */
+export function watchdogBackoffMs(secs, fails, maxSecs = DEFAULTS.watchdogMaxBackoffSecs) {
+  const base = Math.max(0, Number(secs) || 0)
+  const n = Math.max(0, Math.min(20, Number(fails) || 0))
+  return Math.min(base * 2 ** n, Math.max(base, Number(maxSecs) || 0)) * 1_000
 }
 
 /** 允许清单归一化：小写、去空白、只留非空字符串，避免手写配置带来的大小写/空格问题。 */
@@ -217,6 +249,8 @@ export function createRuntime(ctx, cfg, paths) {
   let startPromise = null
   let disposed = false
   let watchdogTimer = null
+  /** 看门狗退避状态：连续失败次数、下一次最早什么时候再拉 */
+  const watchdog = { fails: 0, nextAt: 0 }
 
   function log(level, message) {
     const logger = ctx?.logger
@@ -551,9 +585,9 @@ export function createRuntime(ctx, cfg, paths) {
         service.error = null
         log(
           'info',
-          `端口 ${service.port} 空闲，但 launchd 任务 ${cfg.launchdLabel} 处于 loaded 状态：先让它在 ${LAUNCHD_HANDOFF_WAIT_MS / 1000} 秒内拉起`,
+          `端口 ${service.port} 空闲，但 launchd 任务 ${cfg.launchdLabel} 处于 loaded 状态：先让它在 ${cfg.launchdHandoffMs / 1000} 秒内拉起`,
         )
-        if (await waitForReady(LAUNCHD_HANDOFF_WAIT_MS)) {
+        if (await waitForReady(cfg.launchdHandoffMs)) {
           service.ready = true
           return true
         }
@@ -692,13 +726,25 @@ export function createRuntime(ctx, cfg, paths) {
       if (await probe()) {
         service.ready = true
         service.error = null
+        watchdog.fails = 0
+        watchdog.nextAt = 0
         return
       }
       if (service.child) return // 自己拉起的进程还在，交给 waitReady/exit 处理
+      if (Date.now() < watchdog.nextAt) return // 退避中：别每 30 秒重拉一次、往日志里灌一屏
       log('error', '看门狗探活失败：面板未响应，尝试自动拉起')
       // 走 start() 而不是直接 ensure()：复用 startPromise 互斥，
       // 否则看门狗与 HTTP /start 并发时都可能通过「端口空闲」判定而双 spawn。
       await start('看门狗自愈')
+      if (service.ready) {
+        watchdog.fails = 0
+        watchdog.nextAt = 0
+      } else {
+        watchdog.fails += 1
+        const wait = watchdogBackoffMs(cfg.watchdogSecs, watchdog.fails, cfg.watchdogMaxBackoffSecs)
+        watchdog.nextAt = Date.now() + wait
+        log('error', `看门狗连续 ${watchdog.fails} 次没拉起面板，${Math.round(wait / 1000)} 秒后再试`)
+      }
     } catch (error) {
       log('error', `看门狗异常：${describe(error)}`)
     }
@@ -850,7 +896,7 @@ export function createRuntime(ctx, cfg, paths) {
     startWatchdog,
     log,
     // 自测脚本用：暴露内部件以便在隔离端口上验证，不改变运行时行为。
-    internals: { probe, ensure, snapshot, service },
+    internals: { probe, ensure, snapshot, service, watchdogTick, watchdog },
   }
 }
 

@@ -40,14 +40,16 @@ DSH 左栏 ──点击──> main 整页组件 ──iframe──> http://127.
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `repoRoot` | `/Users/mikejam/Documents/deepseek-harness/QQ_bot` | 工作区根，面板入口推导为 `<repoRoot>/panel/panel.mjs` |
+| `repoRoot` | 插件目录往上两级（`link:` 安装时就是仓库根） | 工作区根，面板入口推导为 `<repoRoot>/panel/panel.mjs` |
 | `panelPort` | `8899` | 面板端口；spawn 时以 `PANEL_PORT` 环境变量传给 panel.mjs |
 | `autoStart` | `true` | 插件加载即拉起面板（「DSH 起则面板起」的主开关） |
 | `watchdogSecs` | `30` | 探活周期（秒）；`0` = 关闭看门狗，只被动探活 |
 | `startTimeoutMs` | `30000` | 单次启动等待上限（毫秒），与 UI 的「启动超时（30 秒）」文案一致 |
 | `stopOnHostExit` | `false` | 插件卸载/宿主退出时是否回收**自己拉起的**面板 |
 | `respectLaunchd` | `true` | 自己拉起前，若同名 launchd 任务 loaded 则让位（防双监督者抢端口） |
-| `launchdLabel` | `com.mikejam.yangyu-panel` | 让位判据用的 launchd label |
+| `launchdLabel` | `com.<当前用户名>.yangyu-panel` | 让位判据用的 launchd label（跟 `panel/install-launchd.sh` 同一规则） |
+| `launchdHandoffMs` | `8000` | launchd loaded 时先等它多久把面板拉起来，等不到再兜底自启 |
+| `watchdogMaxBackoffSecs` | `1800` | 看门狗连续拉不起来时按 `watchdogSecs·2^n` 退避，封顶于此 |
 | `launchctlBin` | `/bin/launchctl` | launchctl 路径；非标准位置或自测时改指向假实现 |
 | `trustedHosts` | `[]` | 额外受信任的 Host 名（反代/自定义域名才需要）。**默认只信 `127.0.0.1` / `localhost` / `[::1]`**；这是防 DNS rebinding 的关键，别随手加域名 |
 | `nodeBin` | `''` | 指定 node；空则依次找 `PANEL_NODE_BIN`、`/opt/homebrew/bin/node`、`/usr/local/bin/node`、`PATH` |

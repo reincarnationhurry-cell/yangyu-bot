@@ -403,6 +403,7 @@ async function main() {
       watchdogSecs: 0,
       launchdLabel: 'com.example.selftest-loaded',
       launchctlBin: shim,
+      launchdHandoffMs: 300, // 让位窗口压短：分支照走，不用干等 8 秒
     })
     const runtime = mod.createRuntime(fakeCtx, cfg, mod.resolvePaths(cfg.repoRoot))
     const route = await withRouteServer(runtime)
@@ -436,6 +437,127 @@ async function main() {
     const o = mod.resolveConfig({ startTimeoutMs: 5_000 })
     assert(o.startTimeoutMs === 5_000, 'startTimeoutMs 覆盖未生效')
     return '默认 30000，可覆盖'
+  })
+
+  await runCase('配置：repoRoot / launchdLabel 不再写死号主机器上的值', () => {
+    const d = mod.resolveConfig(undefined)
+    assert(fs.existsSync(path.join(d.repoRoot, 'panel', 'panel.mjs')), `默认 repoRoot 应推导到仓库根，实际 ${d.repoRoot}`)
+    const os = process.env.USER
+    assert(/^com\..+\.yangyu-panel$/.test(d.launchdLabel), `launchdLabel 形状不对：${d.launchdLabel}`)
+    if (os) assert(d.launchdLabel === `com.${os}.yangyu-panel` || d.launchdLabel.startsWith('com.'), 'launchdLabel 应跟当前用户名走')
+    assert(d.launchdHandoffMs === 8_000, `launchdHandoffMs 默认期望 8000，实际 ${d.launchdHandoffMs}`)
+    return `repoRoot=${d.repoRoot}，label=${d.launchdLabel}`
+  })
+
+  await runCase('看门狗退避：按 2 的幂翻倍、有封顶、0 次失败就是正常周期', () => {
+    const f = mod.watchdogBackoffMs
+    assert(f(30, 0) === 30_000, `0 次失败应为 30s，实际 ${f(30, 0)}`)
+    assert(f(30, 1) === 60_000 && f(30, 3) === 240_000, '应按 2 的幂翻倍')
+    assert(f(30, 10, 1800) === 1_800_000, `应封顶 1800s，实际 ${f(30, 10, 1800)}`)
+    assert(f(30, 99, 1800) === 1_800_000, '超大失败次数也不溢出')
+    return '30s → 60s → … → 封顶 30min'
+  })
+
+  // ── 以下几条要真起一个子进程：用「假面板」（工作区内临时目录里的 10 行 HTTP 服务），
+  //    绝不是真的 panel.mjs —— 不会带上自动养号去碰 B站 账号 ──
+  function makeFakeRepo(kind) {
+    const repo = fs.mkdtempSync(path.join(pkgDir, '.selftest-repo-'))
+    fs.mkdirSync(path.join(repo, 'panel'), { recursive: true })
+    const body = kind === 'crash'
+      ? 'process.exit(1)\n'
+      : `import http from 'node:http'
+http.createServer((q, r) => { r.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); r.end('<title>养鱼面板</title>') })
+  .listen(Number(process.env.PANEL_PORT), '127.0.0.1')
+`
+    fs.writeFileSync(path.join(repo, 'panel', 'panel.mjs'), body)
+    return repo
+  }
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  await runCase('stopService：回收自己拉起的面板（整组 SIGTERM），端口随之释放', async () => {
+    const repo = makeFakeRepo('ok')
+    const port = await freePort()
+    const cfg = mod.resolveConfig({ panelPort: port, repoRoot: repo, autoStart: false, watchdogSecs: 0, respectLaunchd: false, startTimeoutMs: 10_000 })
+    const runtime = mod.createRuntime(fakeCtx, cfg, mod.resolvePaths(repo))
+    const route = await withRouteServer(runtime)
+    try {
+      const started = await route.start()
+      const pid = runtime.internals.service.pid
+      assert(started.panel.ready === true && runtime.internals.service.managed === true, `假面板应被拉起且 managed，实际 ${JSON.stringify(started.panel)}`)
+      assert(pid && alive(pid), '拉起后进程应存活')
+      const res = await route.route('/stop', 'POST')
+      assert(res.status === 200, `POST /stop 期望 200，实际 ${res.status}`)
+      assert(!alive(pid), `stop 之后进程 ${pid} 还活着`)
+      assert(runtime.internals.service.child === null && runtime.internals.service.managed === false, 'stop 后应清掉 child / managed')
+      const reuse = await new Promise((resolve) => {
+        const srv = net.createServer().once('error', () => resolve(false)).listen(port, '127.0.0.1', () => srv.close(() => resolve(true)))
+      })
+      assert(reuse, `stop 后端口 ${port} 应已释放`)
+      return `pid ${pid} 已回收，端口已释放`
+    } finally {
+      await route.close()
+      runtime.dispose()
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  await runCase('dispose：stopOnHostExit=true 回收自己拉起的面板；=false 时不杀', async () => {
+    const repo = makeFakeRepo('ok')
+    const pids = []
+    try {
+      for (const stopOnHostExit of [true, false]) {
+        const port = await freePort()
+        const cfg = mod.resolveConfig({ panelPort: port, repoRoot: repo, autoStart: false, watchdogSecs: 0, respectLaunchd: false, stopOnHostExit, startTimeoutMs: 10_000 })
+        const runtime = mod.createRuntime(fakeCtx, cfg, mod.resolvePaths(repo))
+        await runtime.start('selftest')
+        const pid = runtime.internals.service.pid
+        pids.push(pid)
+        assert(pid && alive(pid), '拉起后进程应存活')
+        runtime.dispose()
+        await new Promise((r) => setTimeout(r, 1_000))
+        if (stopOnHostExit) assert(!alive(pid), `stopOnHostExit=true 时 dispose 应回收 ${pid}`)
+        else assert(alive(pid), `stopOnHostExit=false 时 dispose 不该杀 ${pid}`)
+      }
+      return 'true → 回收；false → 保留'
+    } finally {
+      for (const pid of pids) {
+        try {
+          process.kill(-pid, 'SIGKILL')
+        } catch {
+          /* 已经没了 */
+        }
+      }
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  await runCase('看门狗：面板一起就崩时退避，不再每个周期都重拉', async () => {
+    const repo = makeFakeRepo('crash')
+    const port = await freePort()
+    logs.length = 0
+    const cfg = mod.resolveConfig({ panelPort: port, repoRoot: repo, autoStart: false, watchdogSecs: 30, respectLaunchd: false, startTimeoutMs: 1_500 })
+    const runtime = mod.createRuntime(fakeCtx, cfg, mod.resolvePaths(repo))
+    try {
+      const wd = runtime.internals.watchdog
+      await runtime.internals.watchdogTick()
+      assert(wd.fails === 1 && wd.nextAt > Date.now(), `第一次失败后应进入退避，实际 ${JSON.stringify(wd)}`)
+      const spawnsBefore = logs.filter((l) => l.line.includes('拉起面板')).length
+      await runtime.internals.watchdogTick() // 退避窗口内：不该再拉
+      const spawnsAfter = logs.filter((l) => l.line.includes('拉起面板')).length
+      assert(spawnsAfter === spawnsBefore, '退避窗口内不该再拉起')
+      assert(Math.round((wd.nextAt - Date.now()) / 1000) > 40, '第一次失败后的间隔应翻倍到约 60 秒')
+      return `fails=${wd.fails}，${Math.round((wd.nextAt - Date.now()) / 1000)} 秒后再试`
+    } finally {
+      runtime.dispose()
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
   })
 
   // ─── 汇总 ─────────────────────────────────────────────────

@@ -83,11 +83,13 @@ async function liveWs(port) {
 }
 
 // ─── 常驻连接 ───────────────────────────────────────────────
+// MODE_FILE 必须在 readModePref() 被调用之前定义：以前它写在 launchMode 下面，
+// 读文件时撞 TDZ 抛 ReferenceError，又被 try/catch 吞掉，记下的模式永远读不回来。
+const MODE_FILE = join(DATA, 'web-browser.mode');
+
 let conn = null;
 let connecting = null;
 let launchMode = readModePref(); // 'plain' | 'sandboxless'，记住哪种能起来，下次直接用它
-
-const MODE_FILE = join(DATA, 'web-browser.mode');
 
 function readModePref() {
   const forced = process.env.WEB_MODE;

@@ -15,8 +15,9 @@
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { DATA, localDate, logAction, addTask, addReview, readActions, readConfig, readPause, todayCounts } from './store.mjs';
+import { DATA, localDate, logAction, addTask, addReview as addReviewRaw, readActions, readConfig, readPause, todayCounts } from './store.mjs';
 import * as llm from './llm.mjs';
+import * as notify from './notify.mjs';
 import * as tieba from './tieba.mjs';
 import * as douyin from './douyin.mjs';
 
@@ -24,6 +25,13 @@ const SRC = 'auto';
 const STATE_FILE = join(DATA, 'web-visits.json');
 
 // ─── 小工具 ────────────────────────────────────────────────
+// 进待审的同时在 QQ 里叫号主一声（跟 autopilot 那边同一个做法）
+function addReview(x) {
+  const r = addReviewRaw(x);
+  notify.notifyReview(r).catch(() => {});
+  return r;
+}
+
 const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 const chance = (p) => Math.random() < p;
 const sleep = (ms, signal) => new Promise((res, rej) => {
@@ -291,6 +299,33 @@ export async function visitDouyin({ reason = '定时', signal, cfg = readConfig(
   writeVisitState(state);
   markVisit('douyin');
   return { ok: true, summary: `在抖音刷了 ${watched.length} 个`, watched };
+}
+
+// ─── 发出去 ────────────────────────────────────────────────
+/** 任务箱里哪种任务对应哪个站点（tieba_reply / douyin_comment） */
+export const TASK_SITE = { tieba_reply: 'tieba', douyin_comment: 'douyin' };
+
+/**
+ * 把起草好的一句真的发出去。待审被批准（approveReview）、任务箱里的活被认领（task.mjs post / runTask）
+ * 都走这一个口 —— 以前这两条路都没有接到贴吧 / 抖音，批准后会掉进 B站 的发评论逻辑。
+ * payload：贴吧要 tid，抖音要 vid（起草时就放进去了）。
+ */
+export async function postDraft(site, payload = {}, text, source = SRC) {
+  const body = String(text ?? '').trim();
+  if (!body) throw new Error('内容是空的');
+  if (site === 'tieba') {
+    if (!payload.tid) throw new Error('缺帖子编号，不知道回哪个帖子');
+    await tieba.replyToThread(payload.tid, body);
+    logAction({ kind: 'tb_reply', source, target: payload.tid, title: payload.title, detail: body.slice(0, 120) });
+    return { site, text: body };
+  }
+  if (site === 'douyin') {
+    if (!payload.vid) throw new Error('缺视频编号，不知道评论哪条');
+    await douyin.postComment(payload.vid, body);
+    logAction({ kind: 'dy_comment', source, target: payload.vid, title: payload.title, detail: body.slice(0, 120) });
+    return { site, text: body };
+  }
+  throw new Error(`不认识的站点：${site}`);
 }
 
 // ─── 起草 ──────────────────────────────────────────────────

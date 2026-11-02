@@ -29,7 +29,9 @@ try {
     if (!list.length) { console.log('没有等号主审的东西'); process.exit(0); }
     for (const r of list) {
       const p = r.payload || {};
-      const where = r.kind === 'reply' ? `回 @${p.user}（TA 说：${(p.said || '').slice(0, 40)}）` : r.kind === 'comment' ? `《${p.title || p.bvid}》` : p.date || '';
+      const where = p.site === 'tieba' ? `贴吧「${p.forum || ''}」《${p.title || p.tid}》`
+        : p.site === 'douyin' ? `抖音《${p.title || p.vid}》`
+        : r.kind === 'reply' ? `回 @${p.user}（TA 说：${(p.said || '').slice(0, 40)}）` : r.kind === 'comment' ? `《${p.title || p.bvid}》` : p.date || '';
       const told = wasReminded(r.id) ? '  （已在 QQ 提醒过号主）' : '  （还没提醒过号主）';
       console.log(`#${shortId(r.id)}  ${KIND[r.kind] || r.kind}  ${where}${told}\n    ${r.text.replace(/\n/g, '\n    ')}\n`);
     }

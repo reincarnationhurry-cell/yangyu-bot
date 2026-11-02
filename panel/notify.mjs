@@ -356,6 +356,8 @@ function composeReviewMessage(r, { brief = false } = {}) {
   const tail = brief ? '' : `\n\n回我「可以」就发出去；想改就直接说怎么改，不要就说「算了」～（待审 ${tag}）`;
   const head = brief ? `${tag} ` : '';
   if (r.kind === 'diary') return `${head}📔 今天的养鱼日记写好啦，你看看：\n\n${r.text}${tail}`;
+  if (p.site === 'tieba') return `${head}📮 在「${p.forum || '某个'}」吧看了《${(p.title || '一个帖子').slice(0, 40)}》，想回一句：「${r.text}」${tail}`;
+  if (p.site === 'douyin') return `${head}🎵 刷抖音看到《${(p.title || '一个视频').slice(0, 40)}》，想评论：「${r.text}」${tail}`;
   if (r.kind === 'reply') return `${head}↩️ @${p.user || '有人'} 回复我说：「${(p.said || '').slice(0, 60)}」\n我想这么回：「${r.text}」${tail}`;
   return `${head}💬 刚看完《${p.title || p.bvid || '一个视频'}》，想在评论区说：「${r.text}」${tail}`;
 }

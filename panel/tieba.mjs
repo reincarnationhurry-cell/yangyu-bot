@@ -140,13 +140,23 @@ export function resetThrottle() {
  * 不读页面文案（「登录」「退出」这种词页面上到处都是，容易误判）。
  */
 export async function isLoggedIn() {
+  let cookies;
   try {
     const c = await browser();
-    const { cookies } = await c.send('Storage.getCookies');
-    return (cookies || []).some((x) => x.name === 'bduss' && /(^|\.)baidu\.com$/.test(x.domain || ''));
+    ({ cookies } = await c.send('Storage.getCookies'));
   } catch (e) {
     throw new TiebaError(`查登录状态时浏览器没响应：${e.message}`, 'BROWSER');
   }
+  return hasBduss(cookies);
+}
+
+/**
+ * 纯函数版：一堆 cookie 里有没有百度的登录凭证。
+ * 百度下发的名字是大写的 BDUSS（HTTPS 下还有一份 BDUSS_BFESS），以前写成小写 'bduss'
+ * 精确比较，扫完码也永远判成「没登录」。
+ */
+export function hasBduss(cookies) {
+  return (cookies || []).some((x) => /^BDUSS(_BFESS)?$/i.test(x?.name || '') && /(^|\.)baidu\.com$/.test(x?.domain || ''));
 }
 
 /** 写操作前的闸门：没登录就别往下走了，别等到点了按钮才报奇怪的错 */

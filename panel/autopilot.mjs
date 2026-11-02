@@ -20,6 +20,7 @@ import * as notify from './notify.mjs';
 import * as mind from './mind.mjs';
 import * as social from './social.mjs';
 import * as lingo from './lingo.mjs';
+import * as webvisit from './webvisit.mjs';
 import {
   ROOT, SHICHEN, localDate, logAction, todayCounts, addTask, addReview as addReviewRaw, readReview, updateReview,
   readConfig, readState, writeState, readActions, readJsonl, appendJsonl, FILES, nowIso, readTasks,
@@ -52,6 +53,12 @@ export async function approveReview(id, newText, by = 'panel') {
   const text = String(newText ?? r.text).trim();
   if (!text) throw new Error('内容是空的');
   const src = by === 'bot' ? 'bot' : 'auto';
+  // 贴吧回帖 / 抖音评论也是 reply / comment，但要发到各自站点，不能掉进下面 B站 的分支
+  if (r.payload?.site) {
+    await webvisit.postDraft(r.payload.site, r.payload, text, src);
+    updateReview(r.id, { status: 'posted', text, by });
+    return { kind: r.kind, site: r.payload.site };
+  }
   if (r.kind === 'comment') {
     const res = await bili.postComment({ bvid: r.payload.bvid, message: text });
     logAction({ kind: 'comment', source: src, target: r.payload.bvid, title: r.payload.title, detail: text });
@@ -780,7 +787,8 @@ function summarize(s, aborted) {
 function commentsToday() {
   const today = localDate();
   const posted = todayCounts().comment || 0;
-  const queued = readReview().filter((r) => r.kind === 'comment' && localDate(new Date(r.ts)) === today).length;
+  // 抖音的待审也是 comment，但不占 B站 的名额
+  const queued = readReview().filter((r) => r.kind === 'comment' && !r.payload?.site && localDate(new Date(r.ts)) === today).length;
   const tasks = readTasks().filter((t) => t.type === 'comment' && t.source === SRC && localDate(new Date(t.ts)) === today).length;
   return posted + queued + tasks;
 }
@@ -987,13 +995,18 @@ export async function runTask(task) {
     notify.reportTask(task, { ok, note, watched }).catch(() => {});
   };
   try {
-    if (live.running) {
+    const webSite = webvisit.TASK_SITE[task.type];
+    // 贴吧 / 抖音的活跟 B站 那轮不抢，不用等
+    if (live.running && !webSite) {
       updateTask(task.id, { resultNote: '她正在刷，这轮完了就去' });
       while (live.running) await bili.sleep(10_000);
     }
     let note;
     let ok = true;
-    if (task.type === 'diary') note = await diaryNow();
+    if (webSite) {
+      const r = await webvisit.postDraft(webSite, task.payload, task.payload?.draft, SRC);
+      note = `发出去了：${r.text.slice(0, 60)}`;
+    } else if (task.type === 'diary') note = await diaryNow();
     else if (task.type === 'check') note = await inboxNow();
     else {
       plan = PRESETS[task.type]?.() || (await llm.parseTask(task.note));

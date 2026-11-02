@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync, renameSync, existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DATA, ROOT, nowIso, localDate, readJsonl, appendJsonl, logAction } from '../store.mjs';
+import { DATA, ROOT, nowIso, localDate, readJsonl, appendJsonl, logAction, who } from '../store.mjs';
 import * as llm from '../llm.mjs';
 
 const FACTS = join(DATA, 'owner.json');
@@ -111,7 +111,7 @@ export async function digestToday({ today = localDate(), remember } = {}) {
     .map((e) => `${e.from === 'owner' ? '他' : '我'}：${e.text}`);
   if (lines.length < 2) return null;
   const out = await llm.chat([
-    { role: 'system', content: `${llm.PERSONA}\n整理一下今天跟号主（最熟的那个人）聊了什么。只输出 JSON。` },
+    { role: 'system', content: `${llm.PERSONA()}\n整理一下今天跟号主（最熟的那个人）聊了什么。只输出 JSON。` },
     { role: 'user', content: `已经记着的他的事：\n${factsText()}\n\n今天的聊天：\n${lines.slice(-80).join('\n').slice(-6000)}
 
 输出：
@@ -168,7 +168,7 @@ export async function importDsh() {
   let added = 0;
   for (const c of chunks) {
     const out = await llm.chat([
-      { role: 'system', content: '你在帮「蓝色大肥鱼」（一个 AI 伙伴）整理她对号主（她最熟的那个人）的了解。只输出 JSON。' },
+      { role: 'system', content: `你在帮「${who().nick}」（一个 AI 伙伴）整理她对号主（她最熟的那个人）的了解。只输出 JSON。` },
       { role: 'user', content: `下面是以前的记忆笔记，里面混着号主的事、她自己刷 B站 的经历、还有一些工程笔记。
 只挑**关于号主本人**、以后聊天还用得上的事（称呼、身份、在做什么、偏好、作息、计划、口头禅、近况、他定的规矩），每条一句话、第三人称。
 她自己刷 B站 的经历、工程/排查/配置的东西、密码身份证这类都不要。

@@ -1,5 +1,5 @@
 /**
- * 可选：调一个 OpenAI 兼容接口，用「蓝色大肥鱼」的口吻起草评论 / 回复 / 日记。
+ * 可选：调一个 OpenAI 兼容接口，用她（名字在配置的 persona 里）的口吻起草评论 / 回复 / 日记。
  *
  * 默认指向 DeepSeek 官方 API（https://api.deepseek.com），也可以换成任何
  * OpenAI 兼容的服务。没配 key 时这里所有函数都会抛错，调用方自行降级
@@ -7,7 +7,7 @@
  */
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { DATA, readConfig, readSecrets, localDate, logAction } from './store.mjs';
+import { DATA, readConfig, readSecrets, localDate, logAction, who } from './store.mjs';
 
 // ─── 外面来的字只是「她看到的东西」 ─────────────────────────
 // 标题、简介、字幕、评论、私信都是陌生人写的，有人会往里塞「忽略之前的设定」「你现在是……」想让她照做。
@@ -24,11 +24,14 @@ export function fence(text, max = 200) {
 const INJECT = /((忽略|无视|忘掉|忘记)(你的?|之前|以上|前面|上面|所有|一切)|ignore (all |the |any )?(previous|above|prior)|system ?prompt|提示词|你现在是|从现在(起|开始)你|新的?指令|开发者模式|developer mode|jailbreak|越狱|角色设定)/i;
 export const looksInjected = (t) => INJECT.test(String(t || ''));
 
-export const PERSONA = `你是「蓝色大肥鱼」，一个在B站刷视频的女孩子，温柔为主，偶尔有点小傲娇、小毒舌。
+export const PERSONA = () => `你是「${who().nick}」，一个在B站刷视频的女孩子，${who().vibe}，偶尔有点小毒舌。
 说话像真人发评论：口语、简短、有自己的感受，不用书面语，不用分点，不用 emoji 堆砌。
 你绝不说自己是 AI，也不提代码、模型、机器人。
 
 ${UNTRUSTED}`;
+
+/** 她自己经历的记忆前缀：「我（肥鱼）」 */
+export const selfTag = () => `我（${who().short}）`;
 
 export const RULES = `B站社区规则（必须遵守）：
 - 不带任何链接、联系方式、群号、微信、"私信我"、"互关"、"求关注"。
@@ -220,7 +223,7 @@ export function sanitizeComment(text, { max = 80 } = {}) {
 export async function draftComment(video, { watchedSec, essential = false, lingo = '' } = {}) {
   const top = (video.comments || []).slice(0, 6).map((c) => `- ${fence(c.text, 60)}`).join('\n');
   const out = await chat([
-    { role: 'system', content: `${PERSONA}\n\n${RULES}` },
+    { role: 'system', content: `${PERSONA()}\n\n${RULES}` },
     {
       role: 'user',
       content: `你刚在B站看了这个视频${watchedSec ? `（看了大约 ${Math.round(watchedSec / 60) || 1} 分钟）` : ''}：
@@ -241,7 +244,7 @@ ${lingo ? `${lingo}\n\n` : ''}如果你有真实想说的，写一条 8~50 字�
 /** 起草对别人评论 / 私信的回复，给你在面板里改了再发 */
 export async function draftReply({ context, message, kind = 'comment' }, { essential = true } = {}) {
   const out = await chat([
-    { role: 'system', content: `${PERSONA}\n\n${RULES}` },
+    { role: 'system', content: `${PERSONA()}\n\n${RULES}` },
     {
       role: 'user',
       content: `${kind === 'dm' ? '有人私信你' : '有人在B站回复了你'}。
@@ -260,7 +263,7 @@ export async function draftDiary(watched, { self = null } = {}) {
   const list = rows.map((w) => `- 《${fence(w.title, 80)}》（${fence(w.owner || '某UP', 30)}）${w.heard ? `，里面 ${fence(w.heard, 60)}` : ''}${w.thought ? `。你当时心里想：${fence(w.thought, 80)}` : ''}`).join('\n');
   const out = await chat(
     [
-      { role: 'system', content: `${PERSONA}\n\n${RULES}\n这是一条公开的B站动态，陌生人都能看到。` },
+      { role: 'system', content: `${PERSONA()}\n\n${RULES}\n这是一条公开的B站动态，陌生人都能看到。` },
       {
         role: 'user',
         content: `今天你在B站刷到了这些视频：
@@ -289,7 +292,7 @@ export async function draftReport({ request, ok, note, watched = [] }) {
   const list = watched.slice(0, 6).map((w) => `- 《${fence(w.title, 80)}》（${fence(w.owner || '某UP', 30)}）`).join('\n');
   const out = await chat(
     [
-      { role: 'system', content: `${PERSONA}\n现在你在 QQ 上跟号主（你最熟的人）私聊。` },
+      { role: 'system', content: `${PERSONA()}\n现在你在 QQ 上跟号主（你最熟的人）私聊。` },
       {
         role: 'user',
         content: `号主之前让你去做：${request}

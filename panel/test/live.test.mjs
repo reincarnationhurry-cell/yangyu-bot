@@ -103,3 +103,90 @@ test('watch：点进去、收弹幕、叫停后记一句印象进记忆，面板
     globalThis.fetch = realFetch;
   }
 });
+
+// ─── 陪号主看 ─────────────────────────────────────────────
+const owner = await import('../qq/owner.mjs');
+
+/** 假 B站 + 假模型。liveStatus() 决定还在不在播；模型回 llmOut */
+function fakeNet({ liveStatus = () => 1, llmOut = '{"dm":"","say":""}' } = {}) {
+  const hits = { dm: [], llm: 0 };
+  const ok = (data, extra = {}) => new Response(JSON.stringify({ code: 0, data, ...extra }), { headers: { 'Content-Type': 'application/json' } });
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('/chat/completions')) { hits.llm++; return new Response(JSON.stringify({ choices: [{ message: { content: llmOut } }] })); }
+    if (u.includes('/room/v1/Room/get_info')) return ok({ room_id: 5271, uid: 7, title: '猫猫睡觉', live_status: liveStatus(), area_name: '萌宠', keyframe: '' });
+    if (u.includes('/Master/info')) return ok({ info: { uname: '猫主播' } });
+    if (u.includes('roomEntryAction')) return ok({});
+    if (u.includes('dM/gethistory')) return ok({ room: [{ nickname: 'a', text: `好可爱${Date.now()}`, timeline: String(Date.now()) }] });
+    if (u.includes('/msg/send')) { hits.dm.push(new URLSearchParams(init.body).get('msg')); return ok({}, { message: '' }); }
+    throw new Error('没想到会请求 ' + u);
+  };
+  return hits;
+}
+const until = async (fn, ms = 4000) => { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return true; await new Promise((r) => setTimeout(r, 20)); } return false; };
+
+test('陪看：一直待着、发弹幕（有间隔）、跟号主说一句、聊天时知道在播什么；叫出来才走，不再重复汇报', async () => {
+  const realFetch = globalThis.fetch;
+  const saved = { ...live.T };
+  store.writeSecrets({ llmApiKey: 'test' });
+  Object.assign(live.T, { poll: 20, think: 0, recheck: 1e9, sayGap: 0, dmGap: 60_000 });
+  const hits = fakeNet({ llmOut: '{"dm":"呼噜声好治愈","say":"这只猫打呼好大声哈哈"}' });
+  try {
+    const p = live.watch({ room: '5271', stay: true, danmaku: true });
+    assert.ok(await until(() => hits.dm.length >= 1 && live.view().watching?.said.length >= 1), '想了之后发弹幕、跟号主说话');
+    assert.ok(await until(() => hits.llm >= 4), '一直在看、一直在想');
+    assert.equal(hits.dm.length, 1, '两条弹幕之间要隔一会儿');
+    assert.deepEqual(hits.dm, ['呼噜声好治愈']);
+    assert.equal(live.isStaying(), true);
+    const ctx = live.companionText();
+    assert.match(ctx, /陪他一起看/);
+    assert.match(ctx, /猫主播/);
+    assert.match(ctx, /好可爱/);
+    assert.match(ctx, /呼噜声好治愈/);
+    const said = owner.readChat().filter((e) => e.kind === 'live');
+    assert.ok(said.some((e) => e.text.startsWith('进来啦')), '进去先跟号主说一声');
+    assert.ok(said.some((e) => e.text === '这只猫打呼好大声哈哈'));
+    assert.ok(said.every((e) => e.via === 'panel'), 'QQ 没连就说在面板里');
+    const r = await live.leave();
+    assert.equal(r.byOwner, true);
+    assert.match(r.summary, /陪你看了.*发了 1 条弹幕/);
+    assert.equal(live.isBusy(), false);
+    assert.equal(live.companionText(), '');
+    await p;
+  } finally {
+    globalThis.fetch = realFetch;
+    Object.assign(live.T, saved);
+    store.writeSecrets({ llmApiKey: '' });
+  }
+});
+
+test('陪看：没开弹幕就不发；主播下播自己出来', async () => {
+  const realFetch = globalThis.fetch;
+  const saved = { ...live.T };
+  store.writeSecrets({ llmApiKey: 'test' });
+  Object.assign(live.T, { poll: 20, think: 0, recheck: 0, sayGap: 1e9, dmGap: 0 });
+  let status = 1;
+  const hits = fakeNet({ liveStatus: () => status, llmOut: '{"dm":"哈哈哈","say":""}' });
+  try {
+    const p = live.watch({ room: '5271', stay: true, danmaku: false });
+    assert.ok(await until(() => live.view().watching?.roomid));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(hits.dm.length, 0, '号主没允许就不发弹幕');
+    status = 0;
+    const r = await p;
+    assert.match(r.summary, /主播下播了/);
+    assert.equal(r.byOwner, false);
+  } finally {
+    globalThis.fetch = realFetch;
+    Object.assign(live.T, saved);
+    store.writeSecrets({ llmApiKey: '' });
+  }
+});
+
+test('她的工具：没在看时 leave_live / live_danmaku 老实说；bili_task 有 stay / danmaku 参数', async () => {
+  const brain = await import('../qq/brain.mjs');
+  assert.equal(await brain.runTool('leave_live', {}, {}), '你没在看直播');
+  assert.equal(await brain.runTool('live_danmaku', { on: true }, {}), '你没在看直播');
+  const t = brain.toolDefs().find((x) => x.function.name === 'bili_task');
+  assert.ok(t.function.parameters.properties.stay && t.function.parameters.properties.danmaku);
+});

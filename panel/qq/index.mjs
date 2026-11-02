@@ -7,6 +7,7 @@
  * 别人私聊她一律不理（只记一笔），群消息不看。
  *
  * notify.mjs 发提醒、汇报、分享时也走这里（sendOwner）：小号能主动发，不用等号主先开口。
+ * 号主让她定的提醒（remind.mjs）到点也从这里发；QQ / Telegram 都没连就留在面板聊天框里。
  *
  * 面板里也有个聊天框（panelSay / chatView）：号主坐在电脑前就不用掏手机。跟 QQ 用的是同一个大脑、
  * 同一份聊天记录（面板那几句带 via: 'panel'），所以两边接着聊不会断片；只是她回的话留在面板里，不发到 QQ。
@@ -17,6 +18,7 @@ import * as brain from './brain.mjs';
 import * as voice from './voice.mjs';
 import * as dsh from './dsh.mjs';
 import * as owner from './owner.mjs';
+import * as remind from '../remind.mjs';
 import * as memory from '../memory.mjs';
 import * as llm from '../llm.mjs';
 import * as napcat from './napcat.mjs';
@@ -427,6 +429,32 @@ async function tick(now = Date.now()) {
   const s3 = readState();
   writeState({ ...s3, reachOut: { ...prev, n: prev.n + 1, triedAt: now } });
   logAction({ kind: 'notify', source: 'auto', detail: `主动找你：${line.slice(0, 60)}`, meta: { proactive: true } });
+}
+
+// ─── 到点提醒：不管连没连 QQ 都在跑（没连就说在面板里）─────────────
+let remindTimer = null;
+export function startReminders() {
+  clearInterval(remindTimer);
+  remindTimer = setInterval(() => fireReminders().catch((e) => console.error('[remind]', e.message)), 30_000);
+  remindTimer.unref?.();
+}
+
+export async function fireReminders(now = Date.now()) {
+  const due = remind.takeDue(now);
+  for (const r of due) {
+    const where = await tellOwner(await brain.remindLine(r), 'remind');
+    logAction({ kind: 'remind', source: 'auto', target: r.id, detail: `⏰ 到点提醒了你（${where}）：${r.text}` });
+  }
+  return due.length;
+}
+
+/** 跟号主说一句：QQ / Telegram 连着就发那边，没连或发失败就留在面板聊天框。返回发到哪了 */
+export async function tellOwner(text, kind) {
+  try {
+    if (connected()) { await sendText(text, kind); return tg ? 'Telegram' : 'QQ'; }
+  } catch (e) { console.error('[qq] 说一句', e.message); }
+  await PANEL.text(text, kind);
+  return '面板';
 }
 
 /** 面板「发条测试」 */

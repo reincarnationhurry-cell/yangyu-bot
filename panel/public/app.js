@@ -92,6 +92,7 @@ const I = {
   chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
   check: '<path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/>',
   book: '<path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/>',
+  flag: '<path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/>',
 };
 const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${I[k]}</svg>`;
@@ -105,6 +106,7 @@ const PAGES = [
   { id: 'inbox', name: '消息', icon: 'chat', badge: 'inbox' },
   { id: 'review', name: '待审 · 派活', icon: 'check', badge: 'review' },
   { id: 'diary', name: '养鱼日记', icon: 'book' },
+  { id: 'setup', name: '上手', icon: 'flag' },
 ];
 
 const KIND = {
@@ -151,11 +153,29 @@ function route() {
   main.innerHTML = '';
   main.scrollTop = 0;
   window.scrollTo(0, 0);
-  ({ overview: pageOverview, activity: pageActivity, autopilot: pageAutopilot, explore: pageExplore, web: pageWeb, inbox: pageInbox, review: pageReview, diary: pageDiary })[S.page](main);
+  ({ overview: pageOverview, activity: pageActivity, autopilot: pageAutopilot, explore: pageExplore, web: pageWeb, inbox: pageInbox, review: pageReview, diary: pageDiary, setup: pageSetup })[S.page](main);
 }
 
 function head(title, desc, right = '') {
   return `<div class="page-head"><div><h1>${title}</h1>${desc ? `<p>${desc}</p>` : ''}</div><div class="row wrap">${right}</div></div>`;
+}
+
+// ─── 上手：第一次打开先看这里 ─────────────────────────────────
+async function pageSetup(main) {
+  main.innerHTML = head('上手', '一项一项看看她还缺什么。带「可选」的不配也能用，只是少一样本事') + '<div class="empty">检查中…（要查 B站 和浏览器，十来秒）</div>';
+  let r;
+  try { r = await api('/api/setup'); } catch (e) { main.innerHTML = head('上手') + `<div class="err">${esc(e.message)}</div>`; return; }
+  if (S.page !== 'setup') return;
+  const row = (c) => `<div class="setup-row ${c.ok ? 'ok' : c.optional ? 'opt' : 'bad'}">
+      <div class="setup-ic">${c.ok ? '✓' : c.optional ? '·' : '!'}</div>
+      <div class="setup-tx"><b>${esc(c.name)}</b>${c.optional ? ' <span class="chip">可选</span>' : ''}<div class="small muted">${esc(c.detail || '')}</div>
+        ${!c.ok && c.fix ? `<div class="small">${esc(c.fix)}</div>` : ''}</div>
+      ${c.go && !c.ok ? `<button class="btn sm" data-go="${c.go}">去配置</button>` : ''}
+    </div>`;
+  main.innerHTML = head('上手', r.ready ? '必需的都齐了：右下角🐟能直接跟她聊，「自动养号」打开总开关她就自己过日子了' : `还差 ${r.need} 项必需的`,
+      '<button class="btn sm" id="setupRe">重新检查</button>') +
+    `<div class="card">${r.list.map(row).join('')}</div>`;
+  $('#setupRe').onclick = () => pageSetup(main);
 }
 
 // ─── 总览 ──────────────────────────────────────────────────
@@ -557,6 +577,10 @@ async function pageAutopilot(main) {
     const v = path.split('.').reduce((o, k) => o[k], c);
     return `<div><label class="f">${label}</label><label class="row"><span class="switch"><input type="checkbox" data-path="${path}" ${v ? 'checked' : ''}><span></span></span><span class="small muted">${hint || ''}</span></label></div>`;
   };
+  const txt = (path, label, hint) => {
+    const v = path.split('.').reduce((o, k) => o?.[k], c) ?? '';
+    return `<div><label class="f">${label}</label><input type="text" data-path="${path}" value="${esc(v)}">${hint ? `<div class="hint">${hint}</div>` : ''}</div>`;
+  };
   const llmNote = ap.llmReady ? '<span class="chip green">已配置</span>' : '<span class="chip amber">未配置：评论会交给 QQ 里的她</span>';
 
   main.innerHTML = head('自动养号', '她会在你选的时辰里，随机挑个时间去刷B站：真的看视频（留下观看记录）、随缘点赞、分享、评论',
@@ -571,6 +595,16 @@ async function pageAutopilot(main) {
           return `<div class="h ${c.windows.includes(sc.key) ? 'sel' : ''}" data-k="${sc.key}" title="${esc(sc.label)}">${sc.key}<small>${pad(sc.start)}–${pad(sc.end)}</small></div>`;
         }).join('')}</div>
         <div class="cfg-grid">${num('windowChance', '每个时辰去刷的概率 %', { pct: 1, max: 100, hint: '85% ≈ 每周偶尔偷懒一两次' })}</div>
+      </div>
+      <div class="cfg-sec">
+        <h3>她是谁</h3>
+        <p>起草评论、聊天、记忆里都用这几个名字。性格和说话方式写在项目根目录的 AGENTS.md 里，想换个人设两边一起改。</p>
+        <div class="cfg-grid">
+          ${txt('persona.name', '大名')}
+          ${txt('persona.nick', '外号', '熟人、网友怎么叫她')}
+          ${txt('persona.short', '简称', '面板上、记忆里用')}
+          ${txt('persona.vibe', '一句话性格', '比如：温柔为主、偶尔有点小傲娇的女孩子')}
+        </div>
       </div>
       <div class="cfg-sec">
         <h3>怎么看视频</h3>
@@ -1020,7 +1054,7 @@ async function openLogin() {
     <div class="qr-box">
       <div class="qr">${q.svg}</div>
       <div id="qrMsg" class="qr-msg">用手机 <b>B站 App</b> 扫一扫（首页左上角头像旁边 / 「我的」右上角），然后点确认登录</div>
-      <div class="hint">要登录的是她的号「在逃肥鱼公主」，别扫成你自己的号。二维码大约 3 分钟过期。</div>
+      <div class="hint">要登录的是专门给她的那个 B站 号，别扫成你自己的号。二维码大约 3 分钟过期。</div>
       <button class="btn sm" id="qrNew" style="margin-top:10px">换一张</button>
     </div>`;
   $('#qrNew').onclick = () => openLogin();
@@ -1507,6 +1541,14 @@ $('#themeBtn').onclick = () => {
   try { localStorage.setItem('theme', next); } catch { /* ignore */ }
 };
 
+// 第一次打开、模型还没配：先去「上手」
+if (!location.hash) {
+  let seen = false;
+  try { seen = !!localStorage.getItem('setupSeen'); localStorage.setItem('setupSeen', '1'); } catch { /* ignore */ }
+  if (!seen) api('/api/autopilot').then((ap) => { if (!ap.llmReady && !location.hash) location.hash = '#/setup'; }).catch(() => {});
+}
+// 她的名字在设置里能改：侧边栏跟着用
+fetch('/api/persona').then((r) => r.json()).then((p) => { if (p?.nick) { $('#brandName').textContent = p.nick; document.title = `${p.nick} · 养鱼面板`; } }).catch(() => {});
 route();
 loadOverview().catch(() => {});
 setInterval(() => {

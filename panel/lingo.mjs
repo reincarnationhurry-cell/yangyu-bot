@@ -98,7 +98,7 @@ export async function learn({ remember, today = localDate() } = {}) {
   let j;
   try {
     const out = await llm.chat([
-      { role: 'system', content: `${llm.PERSONA}\n睡前回想今天在B站评论区见到的话，看看学会了什么新说法。只输出 JSON。` },
+      { role: 'system', content: `${llm.PERSONA()}\n睡前回想今天在B站评论区见到的话，看看学会了什么新说法。只输出 JSON。` },
       { role: 'user', content: `今天见过的热评：
 ${l.inbox.map((t) => `- ${llm.fence(t, 80)}`).join('\n')}
 
@@ -115,7 +115,7 @@ ${l.inbox.map((t) => `- ${llm.fence(t, 80)}`).join('\n')}
   }
   const { words, fresh, forgot } = absorb(l, j, today);
   writeLingo({ ...l, inbox: [], words });
-  if (remember) for (const w of fresh) remember(`我（肥鱼）在B站学了个新说法：「${w.phrase}」，${w.meaning}`);
+  if (remember) for (const w of fresh) remember(`${llm.selfTag()}在B站学了个新说法：「${w.phrase}」，${w.meaning}`);
   return { fresh, forgot };
 }
 

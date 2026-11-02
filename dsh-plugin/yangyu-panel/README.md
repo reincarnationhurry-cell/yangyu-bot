@@ -28,7 +28,7 @@ DSH 左栏 ──点击──> main 整页组件 ──iframe──> http://127.
 `profile "desktop" is managed exclusively by the Electron application`）。用应用内 GUI：
 
 1. 左栏「插件」→「添加插件」/「安装第三方插件」
-2. 插件目录填**绝对路径**：`/Users/mikejam/Documents/deepseek-harness/QQ_bot/dsh-plugin/yangyu-panel`
+2. 插件目录填**绝对路径**：`<仓库所在目录>/dsh-plugin/yangyu-panel`
 3. 勾选「立即启用」→ 安装
 
 装完左栏出现小鱼图标；若没出现，重载页面（客户端 bundle 在 `dsh.client.immediately=true` 下随页面加载）。
@@ -57,15 +57,15 @@ DSH 左栏 ──点击──> main 整页组件 ──iframe──> http://127.
 ## 谁在管面板：两种推荐配置
 
 **A. 保持现状（默认，推荐先这样）** —— launchd 让面板脱离 DSH 常驻，插件只做入口 + 兜底自愈。
-面板本来就由 `~/Library/LaunchAgents/com.mikejam.yangyu-panel.plist` 常驻，此时插件**复用**现有进程
+面板本来就由 `~/Library/LaunchAgents/com.<你的用户名>.yangyu-panel.plist` 常驻，此时插件**复用**现有进程
 （`status` 里 `managed: false`），工具条上的「停止」不会去杀它；插件看门狗发现掉线也不会抢，
 而是让给 launchd 去重启。`stopOnHostExit: false`，DSH 退出面板照常活着。
 
 **B. 让面板完全跟随 DSH 生命周期** —— DSH 跑面板才跑，DSH 退出面板就停：
 
 ```bash
-launchctl bootout gui/$UID/com.mikejam.yangyu-panel            # 卸掉 launchd 常驻
-mv ~/Library/LaunchAgents/com.mikejam.yangyu-panel.plist{,.disabled}   # 顺手停掉开机自启
+launchctl bootout gui/$UID/com.$(whoami).yangyu-panel            # 卸掉 launchd 常驻
+mv ~/Library/LaunchAgents/com.$(whoami).yangyu-panel.plist{,.disabled}   # 顺手停掉开机自启
 ```
 
 再把 patch 里本插件 `config.stopOnHostExit` 改成 `true`。之后面板进程由插件独占管理：
@@ -74,7 +74,7 @@ mv ~/Library/LaunchAgents/com.mikejam.yangyu-panel.plist{,.disabled}   # 顺手�
 ## 自测
 
 ```bash
-cd /Users/mikejam/Documents/deepseek-harness/QQ_bot/dsh-plugin/yangyu-panel
+cd <仓库所在目录>/dsh-plugin/yangyu-panel
 node scripts/selftest.mjs
 ```
 

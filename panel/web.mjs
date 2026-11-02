@@ -76,6 +76,9 @@ function findBrowser() {
   return hit;
 }
 
+/** 面板「上手」用：找得到浏览器就给路径，找不到给 null */
+export function browserPath() { try { return findBrowser(); } catch { return null; } }
+
 function devToolsPort() {
   const f = join(PROFILE, 'DevToolsActivePort');
   if (!existsSync(f)) return null;

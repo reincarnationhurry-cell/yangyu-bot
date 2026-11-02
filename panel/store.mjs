@@ -48,12 +48,12 @@ export function appendJsonl(file, obj) {
   mkdirSync(dirname(file), { recursive: true });
   appendFileSync(file, JSON.stringify(obj) + '\n', 'utf-8');
 }
-function readJson(file, fallback) {
+export function readJson(file, fallback) {
   if (!existsSync(file)) return fallback;
   try { return JSON.parse(readFileSync(file, 'utf-8')); } catch { return fallback; }
 }
 /** 先写临时文件再 rename，断电也不会留下半个 JSON */
-function writeJson(file, obj, mode) {
+export function writeJson(file, obj, mode) {
   const tmp = file + '.tmp';
   writeFileSync(tmp, JSON.stringify(obj, null, 2), mode ? { mode } : undefined);
   renameSync(tmp, file);
@@ -136,6 +136,13 @@ export const SHICHEN = [
 ];
 
 export const DEFAULT_CONFIG = {
+  // 她是谁：起草评论、聊天、记忆里都用这几个名字（性格和说话方式在 AGENTS.md 里，想换人设两边一起改）
+  persona: {
+    name: 'deepseek', // 大名
+    nick: '蓝色大肥鱼', // 熟人 / 网友叫她什么
+    short: '肥鱼', // 简称：记忆里「我（肥鱼）自己刷B站」、面板上她的名字
+    vibe: '温柔为主、偶尔有点小傲娇的女孩子', // 一句话的性格
+  },
   enabled: false,
   // 在哪几个时辰里刷；每个时辰内随机挑一个时间点
   windows: ['辰', '午', '酉', '亥'],
@@ -281,6 +288,11 @@ export const DEFAULT_CONFIG = {
     perDay: 1,
     // 一场看几分钟
     minutes: 5,
+    // 陪号主看（「陪我看 XX 的直播」）：一直待在直播间，直到号主叫她出来 / 下播 / 到 stayMaxHours
+    stayMaxHours: 4,
+    danmaku: false, // 陪看时自己发弹幕（不先审：实时的东西没法等）；派活时也能单独开
+    danmakuPerHour: 6,
+    chat: true, // 陪看时看到有意思的，偶尔在聊天里跟号主说一句（最多 15 分钟一次）
   },
   // 贴吧 / 抖音：她自己去逛（web.mjs 开一个独立 Chrome，登录态持久化在 data/web-browser）
   // 和 B站 那套并行但完全独立 —— 没有经验值、没有投币，只有「逛、看、偶尔说一句」
@@ -340,6 +352,12 @@ function deepMerge(base, over) {
 export function readConfig() {
   return deepMerge(DEFAULT_CONFIG, readJson(FILES.config, {}));
 }
+/** 她的名字们（见 DEFAULT_CONFIG.persona）；清空了的回到默认 */
+export function who() {
+  const p = readConfig().persona || {};
+  return Object.fromEntries(Object.entries(DEFAULT_CONFIG.persona).map(([k, v]) => [k, String(p[k] ?? '').trim().slice(0, 40) || v]));
+}
+
 export function writeConfig(patch) {
   const next = deepMerge(readConfig(), patch);
   writeJson(FILES.config, next);
@@ -395,6 +413,7 @@ export const ACTION_NAMES = {
   // 贴吧 / 抖音（web.mjs 那套浏览器里的动作，kind 单独前缀，别和 B站 的混在一起算每日上限）
   tb_thread: '看帖子', tb_reply: '贴吧回帖', tb_follow: '关注贴吧', tb_forum: '逛吧',
   dy_video: '刷抖音', dy_comment: '抖音评论', dy_like: '抖音点赞',
+  live_dm: '发弹幕',
 };
 export function readBlocks() {
   const all = readJson(FILES.blocks, {});

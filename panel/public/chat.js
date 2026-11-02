@@ -1,6 +1,7 @@
 // ─── 聊天框：坐在电脑前直接跟她说，不用掏手机 ─────────────────
 // 跟 QQ 里是同一个她、同一份聊天记录：QQ 上说的这里也看得到（标着「QQ」），这里说的她回在这里。
 // 打开时每 2.5 秒拉一次新消息；收起来时 20 秒拉一次，只为了在按钮上点个小红点。
+// 顶上一条是她记着的提醒（在聊天里让她定的），点开能看、能取消。
 (() => {
   const $c = (s) => document.querySelector(s);
   const escc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -10,7 +11,7 @@
     const t = `${two(d.getHours())}:${two(d.getMinutes())}`;
     return d.toDateString() === new Date().toDateString() ? t : `${d.getMonth() + 1}/${d.getDate()} ${t}`;
   };
-  const TAG = { proactive: '她主动找你', report: '后台汇报', notice: '提醒' };
+  const TAG = { proactive: '她主动找你', report: '后台汇报', notice: '提醒', remind: '⏰ 到点提醒', live: '📡 陪你看直播' };
   const seenKey = 'chatSeen';
   let open = false;
   let last = '';
@@ -21,7 +22,8 @@
   document.body.insertAdjacentHTML('beforeend', `
     <button class="chat-fab" id="chatFab" title="跟她聊天" aria-label="跟她聊天">🐟<i id="chatDot"></i></button>
     <section class="chat-box" id="chatBox" aria-hidden="true">
-      <header><b>肥鱼</b><span id="chatSub" class="small muted"></span><span class="spacer"></span><button class="btn ghost sm" id="chatClose">收起</button></header>
+      <header><b id="chatName">她</b><span id="chatSub" class="small muted"></span><span class="spacer"></span><button class="btn ghost sm" id="chatClose">收起</button></header>
+      <div class="chat-rem" id="chatRem" hidden><button class="chat-rem-t" id="chatRemT"></button><ul id="chatRemL" hidden></ul></div>
       <div class="chat-list" id="chatList"><div class="empty">加载中…</div></div>
       <div class="chat-typing" id="chatTyping">她正在输入…</div>
       <footer><textarea id="chatIn" rows="1" placeholder="跟她说点什么…" title="Enter 发送，Shift+Enter 换行"></textarea><button class="btn primary" id="chatSend">发送</button></footer>
@@ -50,7 +52,7 @@
       if (r.list?.length) {
         list = (last ? [...list, ...r.list] : r.list).slice(-200);
         last = list[list.length - 1].ts;
-        if (open) render();
+        if (open) { render(); pullRem(); }
       } else if (open && !last) render();
       $c('#chatTyping').classList.toggle('show', !!r.typing);
       $c('#chatSub').textContent = r.llm === false ? '面板里还没配模型' : r.typing ? '正在输入…' : '';
@@ -64,11 +66,27 @@
   }
   const schedule = () => { clearTimeout(timer); timer = setTimeout(pull, open ? 2500 : 20000); };
 
+  let rems = [];
+  async function pullRem() {
+    try { rems = (await fetch('/api/reminders').then((x) => x.json())).list || []; } catch { return; }
+    $c('#chatRem').hidden = !rems.length;
+    $c('#chatRemT').textContent = `⏰ 她记着 ${rems.length} 个提醒` + (rems[0] ? `，下一个：${rems[0].when} ${rems[0].text}` : '');
+    $c('#chatRemL').innerHTML = rems.map((r) => `<li><span>${escc(r.when)}</span> ${escc(r.text)}<button class="btn ghost sm" data-rem="${escc(r.id)}">取消</button></li>`).join('');
+  }
+  $c('#chatRemT').onclick = () => { $c('#chatRemL').hidden = !$c('#chatRemL').hidden; };
+  $c('#chatRemL').addEventListener('click', async (e) => {
+    const id = e.target.dataset?.rem;
+    if (!id) return;
+    await fetch('/api/reminders/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).catch(() => {});
+    pullRem();
+  });
+  fetch('/api/persona').then((x) => x.json()).then((p) => { if (p?.short) $c('#chatName').textContent = p.short; }).catch(() => {});
+
   function toggle(v) {
     open = v;
     $c('#chatBox').classList.toggle('show', open);
     $c('#chatBox').setAttribute('aria-hidden', String(!open));
-    if (open) { render(); $c('#chatList').scrollTop = 1e9; $c('#chatIn').focus(); }
+    if (open) { render(); $c('#chatList').scrollTop = 1e9; $c('#chatIn').focus(); pullRem(); }
     pull();
   }
 

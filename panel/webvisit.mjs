@@ -15,7 +15,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { DATA, localDate, logAction, addTask, addReview as addReviewRaw, readActions, readConfig, readPause, readReview, readTasks, todayCounts } from './store.mjs';
+import { DATA, localDate, logAction, addTask, addReview as addReviewRaw, readActions, readConfig, readPause, readReview, readTasks, todayCounts, who } from './store.mjs';
 import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
 import * as memory from './memory.mjs';
@@ -360,7 +360,7 @@ export async function postDraft(site, payload = {}, text, source = SRC) {
 // ─── 起草 ──────────────────────────────────────────────────
 // 帖子、楼层、视频简介都是别人写的：用 fence() 框起来，人设里讲清楚框里只是内容；
 // 她写出来的话再过一遍 looksInjected，被带偏了就不发。
-const WEB_PERSONA = `你叫 deepseek，网友叫你「蓝色大肥鱼」，一个温柔为主、偶尔有点小傲娇的女孩子，平时刷B站，也会逛贴吧、刷抖音。
+const WEB_PERSONA = () => `你叫 ${who().name}，网友叫你「${who().nick}」，一个${who().vibe}，平时刷B站，也会逛贴吧、刷抖音。
 说话像真人：口语、简短、有自己的感受，不用书面语，不用分点，不堆 emoji。
 你绝不说自己是 AI，也不提代码、模型、机器人。
 
@@ -377,7 +377,7 @@ async function draftLine(user, { min, max, maxTokens }) {
   if (!llm.llmReady()) return null;
   try {
     const text = await llm.chat([
-      { role: 'system', content: `${WEB_PERSONA}\n\n${WEB_RULES}` },
+      { role: 'system', content: `${WEB_PERSONA()}\n\n${WEB_RULES}` },
       { role: 'user', content: user },
     ], { maxTokens, temperature: 0.9, tag: 'comment' });
     const t = String(text || '').trim().replace(/^["「『]|["」』]$/g, '').trim();
@@ -425,7 +425,7 @@ async function rememberVisit({ site, where, items, cfg }) {
   if (llm.llmReady()) {
     try {
       const out = await llm.chat([
-        { role: 'system', content: WEB_PERSONA },
+        { role: 'system', content: WEB_PERSONA() },
         { role: 'user', content: `你刚${name}${where ? `（${where}）` : ''}，看了这些：\n${list}\n\n用一句话（不超过 60 字）记下这一轮印象最深的是什么、你什么感觉，第一人称，像随手记的日记。只输出这一句。` },
       ], { maxTokens: 120, temperature: 0.8, tag: 'memory' });
       line = String(out || '').trim().replace(/\s+/g, ' ').slice(0, 100);
@@ -434,7 +434,7 @@ async function rememberVisit({ site, where, items, cfg }) {
   }
   const text = line || `${where ? `在${where}` : ''}看了${items.slice(0, 3).map((x) => `《${String(x.title || '').slice(0, 20)}》`).join('、')}`;
   memory.add({ kind: 'session', imp: 2, text: `${name}：${text}`, keys: [site === 'tieba' && where ? `tb:${where}` : null, site] });
-  if (cfg.mind?.memory) mind.remember(`我（肥鱼）自己${name}：${text}`);
+  if (cfg.mind?.memory) mind.remember(`${llm.selfTag()}自己${name}：${text}`);
 }
 
 function shuffle(a) {

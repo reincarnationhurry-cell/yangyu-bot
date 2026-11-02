@@ -159,7 +159,7 @@ async function main() {
     return `inject=[${mod.inject.join(', ')}]`
   })
 
-  await runCase('resolveConfig：默认值 + 非法值兜底', () => {
+  await runCase('resolveConfig：默认值 + 非法值兜底', async () => {
     const d = mod.resolveConfig(undefined)
     assert(d.autoStart === true, 'autoStart 默认必须为 true（DSH 起则面板起）')
     assert(d.panelPort === 8899, `panelPort 默认期望 8899，实际 ${d.panelPort}`)
@@ -167,7 +167,7 @@ async function main() {
     assert(d.stopOnHostExit === false, 'stopOnHostExit 默认必须为 false')
     assert(d.respectLaunchd === true, 'respectLaunchd 默认必须为 true')
     assert(
-      d.launchdLabel === 'com.mikejam.yangyu-panel',
+      d.launchdLabel === `com.${(await import('node:os')).userInfo().username}.yangyu-panel`,
       `launchdLabel 默认不符：${d.launchdLabel}`,
     )
     const bad = mod.resolveConfig({ panelPort: 'abc', watchdogSecs: -1, autoStart: false })
@@ -259,7 +259,7 @@ async function main() {
       autoStart: false,
       watchdogSecs: 0,
       // 让位窗口压到最短，避免自测等 8 秒
-      launchdLabel: 'com.mikejam.yangyu-panel-selftest-nonexistent',
+      launchdLabel: 'com.example.yangyu-panel-selftest-nonexistent',
     })
     const runtime = mod.createRuntime(fakeCtx, cfg, mod.resolvePaths(cfg.repoRoot))
     const route = await withRouteServer(runtime)

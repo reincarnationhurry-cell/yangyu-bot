@@ -1052,6 +1052,20 @@ export async function liveDanmaku(roomid) {
   return (r.data?.room || []).map((x) => ({ user: x.nickname || '', text: plain(x.text), at: x.timeline || '' })).filter((x) => x.text);
 }
 
+/**
+ * 在直播间发一条弹幕。B站 对被屏蔽词过滤掉的弹幕也回 code=0，只在 message 里写原因（比如「f」「k」），
+ * 那种算没发出去：返回 { ok: false, filtered }。
+ */
+export async function sendLiveDanmaku(roomid, msg) {
+  const ck = loadCookie();
+  const r = await jpost(`${LIVE}/msg/send`, {
+    bubble: '0', msg: String(msg), color: '16777215', mode: '1', room_type: '0', jumpfrom: '0',
+    reply_mid: '0', reply_attr: '0', replay_dmid: '', statistics: '{"appId":100,"platform":5}',
+    fontsize: '25', rnd: String(Math.floor(Date.now() / 1000)), roomid: String(roomid), csrf_token: ck.bili_jct,
+  }, { referer: `https://live.bilibili.com/${roomid}`, origin: 'https://live.bilibili.com' });
+  return r.message ? { ok: false, filtered: r.message } : { ok: true };
+}
+
 /** 点进直播间（进 B站 的观看历史）。没成功不要紧，看还是能看 */
 export async function enterLiveRoom(roomid) {
   await jpost(`${LIVE}/xlive/web-room/v1/index/roomEntryAction`, { room_id: String(roomid), platform: 'pc' }, {

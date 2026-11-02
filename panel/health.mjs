@@ -16,7 +16,7 @@ import { readFileSync, statSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { logAction, readConfig } from './store.mjs';
+import { logAction, readConfig, who } from './store.mjs';
 import * as qq from './qq/index.mjs';
 import * as napcat from './qq/napcat.mjs';
 
@@ -126,7 +126,7 @@ function report(r, notify) {
     logAction({ kind: 'health', source: 'auto', ok: false, detail: `QQ 接入出问题了：${p.text}`, error: p.fix });
     if (notify && process.platform === 'darwin') {
       const esc = (s) => s.replace(/["\\]/g, '');
-      sh('/usr/bin/osascript', ['-e', `display notification "${esc(p.fix)}" with title "🐟 肥鱼的 QQ 断了" subtitle "${esc(p.text.slice(0, 60))}"`]);
+      sh('/usr/bin/osascript', ['-e', `display notification "${esc(p.fix)}" with title "🐟 ${esc(who().short)}的 QQ 断了" subtitle "${esc(p.text.slice(0, 60))}"`]);
     }
   }
   // 好了就把「已通知」清掉，下次再坏还会提醒

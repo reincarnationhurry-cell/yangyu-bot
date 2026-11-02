@@ -1022,8 +1022,10 @@ export async function runTask(task) {
       ok = !!r.ok;
       note = r.summary || r.error || r.skipped || '';
     } else if (task.type === 'live') {
-      const r = await bililive.watch({ request: task.note, room: task.payload?.room, keyword: task.payload?.keyword, reason: '号主让看的' });
+      const p = task.payload || {};
+      const r = await bililive.watch({ request: task.note, room: p.room, keyword: p.keyword, stay: !!p.stay, danmaku: p.danmaku, reason: p.stay ? '陪号主看' : '号主让看的' });
       note = r.summary;
+      if (r.byOwner) task = { ...task, report: null }; // 号主叫她出来的：当场就说了，不再汇报
     } else if (task.type === 'diary') note = await diaryNow();
     else if (task.type === 'check') note = await inboxNow();
     else {

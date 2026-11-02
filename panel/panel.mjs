@@ -30,12 +30,15 @@ import * as webvisit from './webvisit.mjs';
 import * as tieba from './tieba.mjs';
 import * as douyin from './douyin.mjs';
 import * as bililive from './bililive.mjs';
+import * as remind from './remind.mjs';
+import * as setup from './setup.mjs';
 import { openAsHer } from './browser.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
   readReview, updateReview, readConfig, writeConfig, readSecrets, writeSecrets,
   readState, writeState, readJsonl, todayCounts, nowIso,
   readBlocks, clearBlock, withBlock, ACTION_NAMES, readVip, writeVip, readWishes, finishWish, readPause, clearPause,
+  who,
 } from './store.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -543,6 +546,11 @@ const routes = {
   // ─── 面板聊天框：跟 QQ 同一个她、同一份聊天记录 ─────────────────
   'GET /api/chat': async (q) => qq.chatView(String(q.get('after') || '')),
   'POST /api/chat': async (_q, b) => qq.panelChat(b.text),
+  'GET /api/persona': async () => who(),
+  'GET /api/setup': async () => setup.checks(),
+  'GET /api/reminders': async () => ({ list: remind.upcoming().map((r) => ({ ...r, when: remind.whenText(r.at, r.repeat) })) }),
+  'POST /api/reminders': async (_q, b) => remind.addReminder({ when: b.when, text: b.text, repeat: b.repeat, source: 'panel' }),
+  'POST /api/reminders/cancel': async (_q, b) => { const r = remind.cancelReminder(b.id, 'panel'); if (!r) throw new Error('没找到这个提醒'); return r; },
 
   // ─── B站 直播 ──────────────────────────────────────────────
   'GET /api/live': async () => bililive.view(),
@@ -552,21 +560,28 @@ const routes = {
     if ('enabled' in c) patch.enabled = !!c.enabled;
     if ('perDay' in c) patch.perDay = Math.min(6, Math.max(0, Number(c.perDay) || 0));
     if ('minutes' in c) patch.minutes = Math.min(30, Math.max(1, Number(c.minutes) || 5));
+    if ('danmaku' in c) patch.danmaku = !!c.danmaku;
+    if ('chat' in c) patch.chat = !!c.chat;
+    if ('stayMaxHours' in c) patch.stayMaxHours = Math.min(12, Math.max(0.5, Number(c.stayMaxHours) || 4));
+    if ('danmakuPerHour' in c) patch.danmakuPerHour = Math.min(20, Math.max(1, Number(c.danmakuPerHour) || 6));
     writeConfig({ live: patch });
     return bililive.view();
   },
   // 面板「去看直播」：跟 QQ 里派的一样走任务箱，活动记录里看得到
   'POST /api/live/watch': async (_q, b) => {
-    if (bililive.isBusy()) throw new Error('她正在看直播，等这场看完');
+    if (bililive.isBusy()) throw new Error(bililive.isStaying() ? '她正陪你看着呢，先叫她出来' : '她正在看直播，等这场看完');
     if (readState().cooldownUntil > Date.now()) throw new Error('风控冷却中，先在总览里解除冷却');
     const target = String(b.target || '').trim().slice(0, 60);
     const room = bililive.roomFrom(target) || (/^\d{2,12}$/.test(target) ? target : '');
     const payload = room ? { room } : target ? { keyword: target } : {};
-    const task = addTask({ type: 'live', payload, note: target ? `去看「${target}」的直播` : '随便看会儿直播', executor: 'panel', source: 'panel' });
+    if (b.stay) Object.assign(payload, { stay: true, danmaku: !!b.danmaku });
+    const what = target ? `「${target}」的直播` : '直播';
+    const task = addTask({ type: 'live', payload, note: b.stay ? `陪我看${target ? what : '会儿直播'}` : target ? `去看${what}` : '随便看会儿直播', executor: 'panel', source: 'panel' });
     auto.runTask(task).catch(() => {});
     return { ok: true, task };
   },
-  'POST /api/live/stop': async () => { bililive.stop(); return { ok: true }; },
+  'POST /api/live/stop': async () => { bililive.leave().catch(() => {}); return { ok: true }; },
+  'POST /api/live/danmaku': async (_q, b) => ({ ok: bililive.setDanmaku(!!b.on) }),
   'GET /api/live/search': async (q) => {
     const kw = String(q.get('q') || '').trim();
     return { list: kw ? await bili.searchLive(kw) : await bili.liveFollowing().catch(() => []) };
@@ -666,6 +681,7 @@ server.listen(PORT, HOST, () => {
   auto.startScheduler();
   webvisit.startScheduler(); // 贴吧 / 抖音：一天插进去几次串门，跟 B站 那套作息互不干扰
   qq.start(); // 用小号时连 NapCat；用官方机器人时什么都不做
+  qq.startReminders(); // 到点提醒：没连 QQ 也会说在面板聊天框里
   // QQ 接入体检：DSH 自动升级后插件跟不上会静悄悄掉线，5 分钟看一眼
   setTimeout(() => health.check().catch(() => {}), 60_000);
   setInterval(() => health.check().catch(() => {}), 5 * 60_000);

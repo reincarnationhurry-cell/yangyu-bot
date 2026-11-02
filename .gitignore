@@ -21,3 +21,6 @@ tts/*.mp4
 # ── NapCat（Docker 版）：小号登录态、WebUI 密钥 ──
 panel/qq/napcat/data/
 panel/qq/napcat/.env
+
+# ── 号主自己的运维 / 开发笔记（不公开）──
+ops/

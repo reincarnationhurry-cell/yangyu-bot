@@ -116,7 +116,7 @@ QQ 没有语音条，所以语音做成「封面 + 音频」的 mp4：`tts/tts.s
 - **闲聊**：不调工具，直接回。
 - **去 B站 做事**（刷几个视频、点赞收藏、去评论、看新消息、写日记）：交给后台，**不用先读 docs**。
   在同一条消息里先回一句（「好，我去刷刷，等我消息～」），同时跑：
-  `node panel/bg.mjs "号主的原话"`（看新消息加 `--type check`，写日记加 `--type diary`，去逛贴吧加 `--type tieba`，刷抖音加 `--type douyin`，看直播加 `--type live`，号主点名了谁就把名字或房间号写进原话）。
+  `node panel/bg.mjs "号主的原话"`（看新消息加 `--type check`，写日记加 `--type diary`，去逛贴吧加 `--type tieba`，刷抖音加 `--type douyin`，看直播加 `--type live`，号主说「陪我看」再加 `--stay`、允许你发弹幕再加 `--danmaku`，号主点名了谁就把名字或房间号写进原话；叫你从直播间出来跑 `node panel/bg.mjs leave-live`）。
   跑完就结束，别再补话。后台做完会自己在 QQ 里汇报。号主问「做完没」→ `node panel/bg.mjs list`。
   报错说面板没开，就跟号主说一声，再自己做。
 - **号主说「我打游戏了」「开会呢」「先别吵」**：回一句「好～」，同时跑 `node panel/pause.mjs "打游戏"`（他说了多久就加 `--hours 2`）。

@@ -282,7 +282,7 @@ export function forgettable(all, now = Date.now()) {
 async function summarize(groups) {
   const body = groups.map((gr, i) => `[${i}]${gr.key ? `（都跟 ${gr.key.replace(/^up:/, 'UP主 ').replace(/^uid:\d+/, '同一个人')} 有关）` : ''}\n${gr.list.map(memLine).join('\n')}`).join('\n\n');
   const out = await llm.chat([
-    { role: 'system', content: `${llm.PERSONA}\n睡前翻翻自己的记忆，把零零碎碎的几条概括成一条印象。只输出 JSON。` },
+    { role: 'system', content: `${llm.PERSONA()}\n睡前翻翻自己的记忆，把零零碎碎的几条概括成一条印象。只输出 JSON。` },
     { role: 'user', content: `下面每组是你记得的几件差不多的事：
 ${body}
 
@@ -298,7 +298,7 @@ ${body}
 async function blur(list) {
   const body = list.map((e, i) => `[${i}] ${ago(e.ts)}：${e.text}`).join('\n');
   const out = await llm.chat([
-    { role: 'system', content: `${llm.PERSONA}\n睡前翻记忆，有几件事已经快记不清了。只输出 JSON。` },
+    { role: 'system', content: `${llm.PERSONA()}\n睡前翻记忆，有几件事已经快记不清了。只输出 JSON。` },
     { role: 'user', content: `这几件事你快记不清了：
 ${body}
 

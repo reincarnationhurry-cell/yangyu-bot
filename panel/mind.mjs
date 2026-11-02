@@ -123,7 +123,7 @@ const { fence } = llm;
 const skyLine = () => sky.skyText().catch(() => `现在是 ${new Date().getHours()} 点。`);
 
 const ask = async (system, user, maxTokens = 500, opts = {}) =>
-  llm.looseJson(await llm.chat([{ role: 'system', content: `${llm.PERSONA}\n${system}` }, { role: 'user', content: user }], { maxTokens, tag: 'mind', ...opts }));
+  llm.looseJson(await llm.chat([{ role: 'system', content: `${llm.PERSONA()}\n${system}` }, { role: 'user', content: user }], { maxTokens, tag: 'mind', ...opts }));
 
 // 模型有时把「没有」「无」「照抄」这类占位话当成值填进来，当空的处理
 const str = (v, max) => {
@@ -371,7 +371,7 @@ ${moodHint(m)}
   const memoryText = str(j.memory, 120);
   if (memoryText) {
     memory.add({ kind: 'session', imp: 3, emo: (Number(j.feel) || 0) / 3, text: memoryText, keys: watched.map((w) => w.owner && `up:${w.owner}`) });
-    if (cfg.memory) remember(`我（肥鱼）自己刷B站：${memoryText}`);
+    if (cfg.memory) remember(`${llm.selfTag()}自己刷B站：${memoryText}`);
   }
 
   // 冲动：特别想分享的，每天最多一次。号主一小时内说过话就马上发（QQ 规定），不然揣着等他来
@@ -432,7 +432,7 @@ ${thoughts.slice(-20).join('\n')}
     writeMind({ ...readMind(), self, selfHistory: [...m.selfHistory, { date: today, self, changed }].slice(-60) });
     logAction({ kind: 'mind', source: 'auto', detail: `🌙 睡前想了想自己${changed ? `：${changed}` : ''}` });
     memory.add({ kind: 'self', imp: 4, text: `${today} 睡前想自己：${changed || self.slice(0, 80)}` });
-    if (cfg.memory) remember(`我（肥鱼）最近的样子：${self}`);
+    if (cfg.memory) remember(`${llm.selfTag()}最近的样子：${self}`);
   } catch { /* 明天再说 */ }
 }
 

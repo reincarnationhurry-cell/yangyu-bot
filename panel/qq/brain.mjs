@@ -5,7 +5,7 @@
  * 最近的聊天 → 调 DeepSeek（带工具）→ 把回复发回去。不经过 DSH。
  *
  * 她能用的工具都是面板里现成的东西，直接在进程里调，不用跑命令，所以回得快：
- * 发表情包、发语音、记住号主的事 / 改记错的、翻自己的记忆、把 B站 的活交给后台、叫停 / 恢复、处理待审。
+ * 发表情包、发语音、记住号主的事 / 改记错的、翻自己的记忆、定提醒、把 B站 的活交给后台、叫停 / 恢复、处理待审。
  * 面板做不了的（查资料、做新表情）交给 DSH（dsh.mjs），在后台做，做完她再自己说；号主发的图也先让 DSH 网关里的模型看一眼。
  *
  * 另外 QQ 小号可以主动发消息（官方机器人不行），所以她白天隔了很久没听到号主说话，会自己想想要不要找他（maybeReachOut）。
@@ -17,6 +17,8 @@ import * as memory from '../memory.mjs';
 import * as mind from '../mind.mjs';
 import * as sky from '../sky.mjs';
 import * as owner from './owner.mjs';
+import * as remind from '../remind.mjs';
+import * as bililive from '../bililive.mjs';
 import { VOICES, DEFAULT_VOICE } from './voice.mjs';
 import {
   ROOT, readConfig, readReview, readTasks, addTask, updateTask, readState, readPause, setPause, clearPause,
@@ -45,9 +47,13 @@ const HOW = `## 在 QQ 里怎么做事（你现在用的是自己的 QQ 号，�
 - 晚安早安、撒娇、他说「说句话听听」、特别重要的关心，可以调 send_voice 发语音（30 秒内，像说话，别每条都发）。
 - 他说了值得长期记住的事（称呼、身份、偏好、计划、deadline、口头禅、他定的规矩、「记住这个」），调 remember 记下来，别跟他说你在记；
   他纠正你记错的，用 fix_fact 改。
+- 他让你到点叫他、提醒他（「明早 8 点叫我」「每天 11 点催我睡觉」「周五提醒我交报告」），调 set_reminder 记下来，回一句「好，到点叫你」；
+  问有哪些提醒调 reminders，说不用了调 cancel_reminder。没说具体几点的（「晚点提醒我」）先问一句几点。
 - 他问起以前的事、你自己刷过的东西，记不清就调 recall 翻一翻；翻不到就说不记得，别编。
 - 让你去 B站 干活（刷几个、点赞收藏、去评论、看新消息、写日记），调 bili_task 交给后台，同时回一句「好，我去」就行，做完后台会自己跟他说。
   让你去逛贴吧、刷抖音，也调 bili_task，type 填 tieba / douyin；让你去看直播，type 填 live（他点名了谁、哪个房间，填进 keyword）。
+  他说「陪我看」「一起看」某个直播，type 填 live 再加 stay=true：你会一直待在直播间陪他，直到他叫你出来；他说可以发弹幕 / 自己发评论就加 danmaku=true。
+  陪看的时候上下文里有「直播间」一节，照着里面正在发生的跟他聊；他说「出来吧」「别看了」「不看了」调 leave_live，「别发弹幕了」「可以发弹幕」调 live_danmaku。
   问「做完没」调 bili_tasks。BV 号必须是搜出来的或他给的，绝不凭记忆编。
 - 他说「我打游戏了」「开会呢」「先别吵」就调 pause；说「好了」「打完了」就调 resume。没说就照常。
 - 他回「可以」「发吧」「改成……」「算了」这种没头没尾的话，多半是在回待审提醒：先调 reviews 看看，再用 review_decide。
@@ -78,7 +84,18 @@ export function toolDefs() {
     fn('bili_task', '把 B站 的活交给后台（刷视频、点赞收藏、评论、看新消息、写日记、看直播），或者去逛一轮贴吧 / 刷一轮抖音。做完后台会在 QQ 里跟号主汇报', {
       request: { type: 'string', description: '号主的原话' }, type: { type: 'string', enum: ['custom', 'check', 'diary', 'tieba', 'douyin', 'live'], description: 'check=看新评论私信，diary=写今天的日记，tieba=逛贴吧，douyin=刷抖音，live=去 B站 看直播，其他都是 custom' },
       keyword: { type: 'string', description: 'type=live 时：他点名要看的主播名 / 关键词 / 房间号；没点名就不填，你自己挑' },
+      stay: { type: 'boolean', description: 'type=live 时：他要你陪他一起看（一直待着，直到他叫你出来）就填 true' },
+      danmaku: { type: 'boolean', description: 'stay=true 时：他允许你在直播间自己发弹幕就填 true' },
     }, ['request']),
+    fn('leave_live', '从直播间出来（他叫你别看了 / 出来吧）。会等你记完印象，返回这场看了什么'),
+    fn('live_danmaku', '陪看时开 / 关自己发弹幕', { on: { type: 'boolean' } }, ['on']),
+    fn('set_reminder', `定一个提醒，到点你会自己去跟号主说。现在是 ${remind.nowText()}，「明早」「周五」「半小时后」都换算成具体时间`, {
+      when: { type: 'string', description: '本地时间，格式 YYYY-MM-DD HH:mm' },
+      text: { type: 'string', description: '提醒他什么，比如「起床」「交周报」' },
+      repeat: { type: 'string', enum: remind.REPEATS, description: 'none=就一次，daily=每天，weekdays=工作日，weekly=每周这天' },
+    }, ['when', 'text']),
+    fn('reminders', '看看现在定了哪些提醒'),
+    fn('cancel_reminder', '取消一个提醒（id 是提醒前面 # 后面那串）', { id: { type: 'string' } }, ['id']),
     fn('bili_tasks', '看看交给后台的活做到哪了'),
     fn('pause', '号主要你先停（打游戏、开会）：后台不刷、不回评论、不主动找他', { reason: { type: 'string' }, hours: { type: 'number', description: '他说了多久就填，没说就不填' } }),
     fn('resume', '号主说好了，接着过自己的日子'),
@@ -137,12 +154,31 @@ export async function runTool(name, args, out) {
       if (!web && readState().cooldownUntil > Date.now()) return '风控冷却中，B站 现在先别碰，跟他说一声晚点再去';
       const type = web ? `web_${a.type}` : ['check', 'diary', 'live'].includes(a.type) ? a.type : 'custom';
       const kw = String(a.keyword || '').trim().slice(0, 30);
-      const payload = type === 'live' && kw ? (/^\d{2,12}$/.test(kw) ? { room: kw } : { keyword: kw }) : undefined;
+      let payload = type === 'live' && kw ? (/^\d{2,12}$/.test(kw) ? { room: kw } : { keyword: kw }) : undefined;
+      if (type === 'live' && a.stay) payload = { ...payload, stay: true, danmaku: !!a.danmaku };
+      if (type === 'live' && bililive.isBusy()) return `你正在看直播（${bililive.isStaying() ? '陪他看着' : '自己看着'}），要换就先调 leave_live 出来`;
       const task = addTask({ type, payload, note: String(a.request || '').slice(0, 200), executor: 'panel', source: 'bot', report: 'qq' });
       auto.runTask(task).catch((e) => updateTask(task.id, { status: 'failed', resultNote: e.message }));
       out.task = task.id;
       return '交给后台了，做完会自己跟他说；你这条回复就说一声「好，我去」之类的';
     }
+    case 'set_reminder': {
+      try {
+        const r = remind.addReminder({ when: a.when, text: a.text, repeat: a.repeat });
+        return `${r.existed ? '本来就定着' : '定好了'}：${remind.whenText(r.at, r.repeat)} 提醒他「${r.text}」（#${r.id}）`;
+      } catch (e) { return `没定上：${e.message}`; }
+    }
+    case 'reminders': return remind.listText() || '现在没有提醒';
+    case 'cancel_reminder': {
+      const r = remind.cancelReminder(a.id);
+      return r ? `取消了：${r.text}` : '没找到这个提醒';
+    }
+    case 'leave_live': {
+      if (!bililive.isBusy()) return '你没在看直播';
+      const r = await bililive.leave();
+      return r?.summary ? `出来了：${r.summary}。跟他说一声，可以顺口说说感受` : '出来了';
+    }
+    case 'live_danmaku': return bililive.setDanmaku(a.on) ? (a.on ? '好，你可以自己发弹幕了（别刷屏）' : '好，不发弹幕了') : '你没在看直播';
     case 'bili_tasks': {
       const mine = readTasks().filter((t) => t.report === 'qq').slice(0, 5);
       const S = { pending: '排队', in_progress: '在做', done: '做完了', failed: '没做成', cancelled: '取消了' };
@@ -203,6 +239,7 @@ export async function contextText(message = '') {
     `## 你自己\n${mind.stateText(m)}`,
     `## 你今天自己的经历（刷 B站 这些是你自己的事，不是他的）\n${todayLife() || '（今天还没刷）'}`,
     past && `## 跟这句话有关、你想起来的\n${past}`,
+    bililive.companionText() && `## 直播间\n${bililive.companionText()}`,
     `## 关于号主（最熟的那个人）你知道的\n${owner.factsText()}`,
     [pause && `- 他叫停了你${pause.reason ? `（${pause.reason}）` : ''}，后台的活都停着`, pending && `- 有 ${pending} 条待审等他点头`, busy && `- 后台还有 ${busy} 件他交代的活在做`].filter(Boolean).join('\n'),
   ].filter(Boolean).join('\n\n');
@@ -216,7 +253,7 @@ function history(list) {
     const t = Date.parse(e.ts);
     const gap = prev && t - prev > 3 * 3600_000 ? `（隔了 ${Math.round((t - prev) / 3600_000)} 小时）` : '';
     prev = t;
-    const tag = { sticker: '[发了表情包] ', voice: '[发了语音] ', proactive: '[你主动找他] ', report: '[后台汇报] ', notice: '[提醒] ' }[e.kind] || '';
+    const tag = { sticker: '[发了表情包] ', voice: '[发了语音] ', proactive: '[你主动找他] ', report: '[后台汇报] ', notice: '[提醒] ', remind: '[到点提醒] ' }[e.kind] || '';
     out.push({ role: e.from === 'owner' ? 'user' : 'assistant', content: `${gap}${tag}${e.text}` });
   }
   return out;
@@ -226,7 +263,7 @@ function history(list) {
 // 表情包连带后面的文件名；语音那句已经是语音了，连同同一行后面的字一起去掉，免得文字再念一遍
 const ECHO_STICKER = /\[发了表情包\]\s*(?:[a-z]+_[\u4e00-\u9fa5]+(?:\.png)?)?/gi;
 const ECHO_VOICE = /\[发了语音\][^\n]*/g;
-const ECHO_TAG = /\[(?:你主动找他|后台汇报|提醒)\]\s*|^（隔了 \d+ 小时）/gm;
+const ECHO_TAG = /\[(?:你主动找他|后台汇报|提醒|到点提醒)\]\s*|^（隔了 \d+ 小时）/gm;
 
 /** 发出去之前收拾一下：去掉 markdown、去掉记忆插件那种「已更新日志」的尾巴、去掉学着聊天记录写的标记 */
 export function tidyReply(text) {
@@ -286,6 +323,25 @@ export async function researchReply(question, found) {
 export { voiceB64 } from './voice.mjs';
 
 export const stickerB64 = (name) => readFileSync(join(STICKERS, `${name}.png`)).toString('base64');
+
+// ─── 到点提醒 ──────────────────────────────────────────────
+/** 到点了：用她的口吻叫他一声（一两句）；模型不在 / 想歪了就平铺直叙 */
+export async function remindLine(r) {
+  const lateMin = Math.round((r.late || 0) / 60_000);
+  const flat = `${lateMin >= 10 ? '（晚了一会儿）' : ''}⏰ 到点啦：${r.text}`;
+  if (!llm.llmReady()) return flat;
+  try {
+    const out = await llm.chatRaw([
+      { role: 'system', content: `${persona()}\n\n${llm.UNTRUSTED}` },
+      { role: 'system', content: await contextText() },
+      ...history(owner.recentChat(6)),
+      { role: 'user', content: `（这条不是他发的）他之前让你到点提醒他：${llm.fence(r.text, 120)}。${lateMin >= 10 ? `你晚了 ${lateMin} 分钟才想起来（那会儿你没在线），顺口说一声。` : '现在到点了。'}
+用你的口吻叫他一声，1~2 句，提醒的事一定要说清楚，像微信里发的，不要 markdown。` },
+    ], { maxTokens: 150, temperature: 0.8, tag: 'qq', essential: true });
+    const t = tidyReply(out.content);
+    return t && t.length <= 150 && !llm.looksInjected(t) ? t : flat;
+  } catch { return flat; }
+}
 
 // ─── 主动找他 ──────────────────────────────────────────────
 /**

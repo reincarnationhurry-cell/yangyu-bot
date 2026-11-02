@@ -128,7 +128,7 @@ async function maybeLike({ oid, type, rpid, user, said }) {
 
 const ask = async (user, maxTokens = 300, essential = false) =>
   llm.looseJson(await llm.chat([
-    { role: 'system', content: `${llm.PERSONA}\n\n${llm.RULES}\n- 回别人的评论时，像网友之间接话：可以附和、接梗、补充、轻轻抬杠，别说教，别尬夸，别客服腔。
+    { role: 'system', content: `${llm.PERSONA()}\n\n${llm.RULES}\n- 回别人的评论时，像网友之间接话：可以附和、接梗、补充、轻轻抬杠，别说教，别尬夸，别客服腔。
 - 你的心情只是背景，回的话要接**对方说的东西**，别句句扯到自己困了、饿了、心情怎样。
 ${lingo.lingoText()}` },
     { role: 'user', content: user },
@@ -321,7 +321,7 @@ export async function checkInbox({ essential = false } = {}) {
     // 聊过的写进 DSH 记忆，QQ 里的她就知道今天在B站跟谁聊了什么
     if (cfg.mind.memory && out.replied.length) {
       const said = out.replied.slice(0, 2).map((r) => `「${r.user}」说「${r.said.slice(0, 20)}」，我回「${r.text.slice(0, 24)}」`).join('；');
-      mind.remember(`我（肥鱼）在B站评论区跟人聊了几句：${said}`);
+      mind.remember(`${llm.selfTag()}在B站评论区跟人聊了几句：${said}`);
     }
     const parts = [`看了 ${fresh.length} 条新回复`];
     if (out.replied.length) parts.push(`回了 ${out.replied.length} 条`);

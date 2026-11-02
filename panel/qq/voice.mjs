@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'no
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 import { ROOT } from '../store.mjs';
 
 const run = promisify(execFile);
@@ -118,6 +118,12 @@ export function toOgg(mp3) {
 
 // ─── 听 ────────────────────────────────────────────────────
 export const canHear = () => !!bin('mlx_whisper');
+/** 能不能说话：要 ffmpeg 或 edge-tts（GPT-SoVITS 也要 ffmpeg 转格式）；macOS 还能退到系统的 say */
+export function canSpeak() {
+  const onPath = (n) => (process.env.PATH || '').split(delimiter).some((d) => d && existsSync(join(d, n)));
+  const ffmpeg = !!bin('ffmpeg') || onPath('ffmpeg');
+  return { ffmpeg, edge: !!bin('edge-tts') || onPath('edge-tts'), say: existsSync('/usr/bin/say') };
+}
 
 /** 一段音频（QQ 给的 mp3、Telegram 的 ogg 都行，ffmpeg 自己认）→ 听写出来的文字；听不了 / 没听清返回 '' */
 export async function transcribe(mp3, ext = 'mp3') {

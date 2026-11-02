@@ -92,6 +92,7 @@ const I = {
   chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>',
   check: '<path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/>',
   book: '<path d="M4 4h10a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M4 16a4 4 0 0 1 4-4h10"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/>',
 };
 const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${I[k]}</svg>`;
 
@@ -100,6 +101,7 @@ const PAGES = [
   { id: 'activity', name: '活动记录', icon: 'list' },
   { id: 'autopilot', name: '自动养号', icon: 'bolt' },
   { id: 'explore', name: '刷视频', icon: 'play' },
+  { id: 'web', name: '逛逛', icon: 'globe' },
   { id: 'inbox', name: '消息', icon: 'chat', badge: 'inbox' },
   { id: 'review', name: '待审 · 派活', icon: 'check', badge: 'review' },
   { id: 'diary', name: '养鱼日记', icon: 'book' },
@@ -114,6 +116,9 @@ const KIND = {
   login: ['🔑', '登录'], notify: ['📮', 'QQ 提醒'], favorite: ['⭐', '收藏'], vip_new: ['🌟', '特别关注更新'], dyn_like: ['👍', '动态点赞'], vip: ['🌟', '特别关注'], follow: ['➕', '关注'],
   mind: ['💭', '心里想'], dig: ['🕳️', '顺藤摸瓜'],
   join: ['🗨️', '评论区搭话'], social: ['📬', '看回复'], reply_like: ['👍', '评论点赞'],
+  // 贴吧 / 抖音：和 B站 的动作分开记，一眼能看出她在哪个平台干什么
+  tb_forum: ['🏛️', '逛吧'], tb_thread: ['📖', '看帖子'], tb_reply: ['✍️', '贴吧回帖'], tb_follow: ['➕', '关注贴吧'],
+  dy_video: ['🎵', '刷抖音'], dy_comment: ['💬', '抖音评论'], dy_like: ['❤️', '抖音点赞'],
 };
 const SOURCE = { auto: ['自动', 'blue'], panel: ['面板', 'violet'], bot: ['QQ里的她', 'pink'] };
 
@@ -145,7 +150,7 @@ function route() {
   main.innerHTML = '';
   main.scrollTop = 0;
   window.scrollTo(0, 0);
-  ({ overview: pageOverview, activity: pageActivity, autopilot: pageAutopilot, explore: pageExplore, inbox: pageInbox, review: pageReview, diary: pageDiary })[S.page](main);
+  ({ overview: pageOverview, activity: pageActivity, autopilot: pageAutopilot, explore: pageExplore, web: pageWeb, inbox: pageInbox, review: pageReview, diary: pageDiary })[S.page](main);
 }
 
 function head(title, desc, right = '') {
@@ -669,9 +674,15 @@ async function pageAutopilot(main) {
         <h3>模型（可选）${llmNote}</h3>
         <p>任意 OpenAI 兼容接口，默认 DeepSeek 官方。Key 只存在本机 <code>panel/data/secrets.json</code>，不会进 git、也不会传回页面。</p>
         <div class="cfg-grid">
+          <div><label class="f">线路</label><select data-path="llm.active"><option value="">默认（用下面的地址和模型）</option><option value="gemini"${c.llm.active === 'gemini' ? ' selected' : ''}>Google Gemini</option></select></div>
           <div><label class="f">接口地址</label><input data-path="llm.baseUrl" value="${esc(c.llm.baseUrl)}"></div>
           <div><label class="f">模型名</label><input data-path="llm.model" list="modelList" value="${esc(c.llm.model)}" autocomplete="off"><datalist id="modelList"></datalist><div class="hint">DeepSeek 官方填 deepseek-chat；本地网关一般是「提供方/模型」</div></div>
           <div><label class="f">API Key</label><input type="password" id="llmKey" placeholder="${ap.hasKey ? '已保存（留空不改）' : 'sk-…'}" autocomplete="off"></div>
+        </div>
+        <div id="geminiBox" style="display:none;margin-top:10px">
+          <div class="cfg-grid">
+            <div><label class="f">Gemini 模型名</label><input data-path="llm.providers.gemini.model" list="modelList" value="${esc(c.llm.providers?.gemini?.model || 'gemini/gemini-3.8-flash')}" autocomplete="off"><div class="hint">走上面那个接口地址和同一把 Key，不用另配。它比 deepseek 慢，一次要 6~8 秒</div></div>
+          </div>
         </div>
         <div class="row" style="margin-top:10px"><button class="btn sm" id="llmModels">列出可用模型</button><button class="btn sm" id="llmTest">测试连通</button><span class="small muted" id="llmMsg"></span></div>
         <div class="cfg-grid" style="margin-top:10px">
@@ -780,7 +791,7 @@ async function pageAutopilot(main) {
     for (const el of $$('[data-path]', main)) {
       const keys = el.dataset.path.split('.');
       let o = c;
-      for (const k of keys.slice(0, -1)) o = o[k];
+      for (const k of keys.slice(0, -1)) o = o[k] ?? (o[k] = {});
       const last = keys[keys.length - 1];
       if (el.type === 'checkbox') o[last] = el.checked;
       else if (el.type === 'number') o[last] = el.dataset.pct ? Number(el.value) / 100 : Number(el.value);
@@ -795,6 +806,10 @@ async function pageAutopilot(main) {
   const save = async (extra = {}) => {
     const body = { ...collect(), ...extra };
     if (body.vip) delete body.vip.users; // 名单走单独的接口，别被这个页面里的旧名单覆盖
+    // 线路走 /api/qq/mode、Telegram 绑定由后端自动认人（谁第一个私聊谁就是号主）：
+    // 这两个都不归这个表单管。页面里的 config 是「加载那一刻」的快照，切完线路只要不刷新页面，
+    // 旧值就一直躺在 c.qq 里 —— 之后随便改点什么再保存，就会把线路打回加载时的那个。
+    if (body.qq) { delete body.qq.mode; delete body.qq.tg; }
     const k = $('#llmKey').value.trim();
     if (k) body.llmApiKey = k;
     for (const id of ['qqAppId', 'qqAppSecret', 'qqOpenId', 'onebotToken', 'telegramToken', 'modelscopeToken']) {
@@ -805,6 +820,17 @@ async function pageAutopilot(main) {
   };
   $('#saveCfg').onclick = (e) => busy(e.target, async () => { await save(); toast('设置已保存'); route(); });
   $('[data-path="enabled"]', main).onchange = (e) => busy(null, async () => { await save({ enabled: e.target.checked }); toast(e.target.checked ? '自动养号已打开' : '已关闭'); route(); });
+  // 线路切换：选了 gemini 就展开它自己的模型名（地址和 Key 跟上面共用）
+  const providerSel = $('[data-path="llm.active"]', main);
+  if (providerSel) {
+    providerSel.value = c.llm.active || '';
+    providerSel.onchange = () => {
+      const showGemini = providerSel.value === 'gemini';
+      const box = $('#geminiBox');
+      if (box) box.style.display = showGemini ? '' : 'none';
+    };
+    providerSel.onchange();
+  }
   $('#replan').onclick = (e) => busy(e.target, async () => { await save(); await api('/api/autopilot/replan', {}); toast('重新抽好了'); route(); });
   // 测试前先保存，测的就是框里现在填的
   $('#llmTest').onclick = (e) => busy(e.target, async () => {
@@ -845,6 +871,8 @@ async function pageAutopilot(main) {
   });
   // QQ 连接
   const qqRender = (q) => {
+    // 页面里的 config 是加载时的快照，切换线路后要把它同步过来，免得之后保存时带着旧线路
+    if (q && q.mode) c.qq.mode = q.mode;
     const name = q.mode === 'telegram' ? 'Telegram' : '小号';
     $('#qqState').innerHTML = q.mode === 'official' ? '<span class="chip">官方机器人</span>'
       : q.connected ? `<span class="chip green">${name}在线 ${esc(String(q.selfId || ''))}</span>`

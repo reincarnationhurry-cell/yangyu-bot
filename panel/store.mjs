@@ -205,6 +205,20 @@ export const DEFAULT_CONFIG = {
   llm: {
     baseUrl: 'https://api.deepseek.com',
     model: 'deepseek-chat',
+    // active: null = 用上面的 baseUrl/model；填线路名（如 'gemini'）= 用 providers[name]
+    active: null,
+    // 换条线路＝换个模型名。走同一个网关时只写 model 就够，地址和密钥都继承上面的，
+    // 不用再单独配一份 key。
+    providers: {
+      gemini: {
+        model: 'gemini/gemini-3.8-flash',
+        // 它是推理模型，默认会把一大截 token 花在思考上（实测 632 tok、9.8 秒，正文只剩 33 tok）。
+        // 降到 low 后思考归零、耗时和字节 deepseek 持平（约 4 秒），正文反而更长。
+        body: { reasoning_effort: 'low' },
+        // 兜底：万一某个 prompt 又触发思考，别让正文被挤空
+        minTokens: 1200,
+      },
+    },
     // 每天后台自己动脑子（内心、社交、自动评论）的上限，0 = 不限；你点的、你派的活不算在里面
     dailyCalls: 300,
     dailyTokens: 600000,
@@ -261,6 +275,50 @@ export const DEFAULT_CONFIG = {
   },
   // 碰到风控码后歇多久（分钟）
   cooldownMin: 120,
+  // 贴吧 / 抖音：她自己去逛（web.mjs 开一个独立 Chrome，登录态持久化在 data/web-browser）
+  // 和 B站 那套并行但完全独立 —— 没有经验值、没有投币，只有「逛、看、偶尔说一句」
+  //
+  // 为什么不用 MediaCrawler 那类爬虫框架：它们要 Python + Playwright + JS 逆向，
+  // 而这里要的不是「采集数据」，是「她像人一样逛」。真 Chrome、真登录态、真点击，
+  // 顺带也就不需要维护各平台的签名算法。代价是慢一点、只能单页操作 —— 对养鱼来说正好。
+  web: {
+    enabled: false,
+    // 一天里额外去这两个地方逛几次（B站 那几个时辰照旧）
+    visitsPerDay: { tieba: 2, douyin: 2 },
+    tieba: {
+      enabled: true,
+      // 逛哪些吧
+      forums: ['猫', '天文'],
+      // 每轮看几个帖子
+      threadsMin: 2,
+      threadsMax: 5,
+      // 每轮翻不翻下一页（翻一页能看到更多新贴）
+      paging: true,
+      // 看一个帖子停留多久（秒）
+      readMinSec: 15,
+      readMaxSec: 90,
+      // 回帖：off 不回 / task 交给 QQ 里的她 / llm 本地起草（进待审）
+      reply: { mode: 'task', chance: 0.12, dailyMax: 3, review: true },
+      followChance: 0.2,
+      // 一轮最多回几次（回帖比 B站 评论更容易被当成灌水）
+      replyHardMax: 2,
+    },
+    douyin: {
+      enabled: true,
+      // 未登录只有 /hot 能出内容；登录后 search / recommend 才好用
+      sources: ['hot'],
+      videosMin: 2,
+      videosMax: 5,
+      watchMinSec: 10,
+      watchMaxSec: 60,
+      comments: { mode: 'task', chance: 0.08, dailyMax: 2, review: true },
+      likeChance: 0.3,
+    },
+    // 掉登录多久查一次（两个站点共用一个浏览器）
+    loginCheckMin: 60,
+    quietStart: 1,
+    quietEnd: 8,
+  },
 };
 
 function deepMerge(base, over) {
@@ -325,6 +383,9 @@ export function clearPause({ source = 'bot' } = {}) {
 // 失败越多越像异常账号 —— 跟投币锁一个道理，只是不永久。
 export const ACTION_NAMES = {
   like: '点赞', share: '分享', favorite: '收藏', dyn_like: '动态点赞', comment: '评论', follow: '关注', reply_like: '评论点赞',
+  // 贴吧 / 抖音（web.mjs 那套浏览器里的动作，kind 单独前缀，别和 B站 的混在一起算每日上限）
+  tb_thread: '看帖子', tb_reply: '贴吧回帖', tb_follow: '关注贴吧', tb_forum: '逛吧',
+  dy_video: '刷抖音', dy_comment: '抖音评论', dy_like: '抖音点赞',
 };
 export function readBlocks() {
   const all = readJson(FILES.blocks, {});

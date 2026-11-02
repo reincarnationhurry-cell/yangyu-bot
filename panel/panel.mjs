@@ -25,6 +25,10 @@ import * as health from './health.mjs';
 import * as qq from './qq/index.mjs';
 import * as napcat from './qq/napcat.mjs';
 import * as owner from './qq/owner.mjs';
+import * as web from './web.mjs';
+import * as webvisit from './webvisit.mjs';
+import * as tieba from './tieba.mjs';
+import * as douyin from './douyin.mjs';
 import { openAsHer } from './browser.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
@@ -222,9 +226,11 @@ const routes = {
   // 自动养号
   'GET /api/autopilot': async () => autopilotView(),
   'POST /api/autopilot/config': async (_q, b) => {
-    const { llmApiKey, qqAppId, qqAppSecret, qqOpenId, onebotToken, telegramToken, modelscopeToken, ...patch } = b;
+    const { llmApiKey, geminiApiKey, qqAppId, qqAppSecret, qqOpenId, onebotToken, telegramToken, modelscopeToken, ...patch } = b;
     if (typeof modelscopeToken === 'string' && modelscopeToken.trim()) writeSecrets({ modelscopeToken: modelscopeToken.trim() });
     if (typeof llmApiKey === 'string') writeSecrets({ llmApiKey: llmApiKey.trim() });
+    // geminiApiKey 只剥离不落库：切模型现在走同一个网关，不再需要单独的密钥
+    void geminiApiKey;
     if (typeof onebotToken === 'string' && onebotToken.trim()) writeSecrets({ onebotToken: onebotToken.trim() });
     if (typeof telegramToken === 'string' && telegramToken.trim()) writeSecrets({ telegramToken: telegramToken.trim() });
     // QQ 提醒的凭证：只存本机 secrets.json，留空表示不改
@@ -239,6 +245,10 @@ const routes = {
       else if (place !== before.sky.place || !Number.isFinite(before.sky.lat)) Object.assign(patch.sky, { place, ...(await sky.geocode(place)) });
       else Object.assign(patch.sky, { lat: before.sky.lat, lon: before.sky.lon, label: before.sky.label });
     }
+    // 线路和 Telegram 绑定不归这个接口管：线路走 /api/qq/mode，绑定由后端认第一个私聊的人。
+    // 页面里的 config 是加载时的快照，切完线路没刷新页面就会带着旧值回来 —— 这里兜一道，
+    // 否则一次普通保存就能把线路打回加载时那个（表现为「过一会自己切回官方机器人」）。
+    if (patch.qq) { delete patch.qq.mode; delete patch.qq.tg; }
     const cfg = writeConfig(patch);
     if (JSON.stringify(before.windows) !== JSON.stringify(cfg.windows) || before.windowChance !== cfg.windowChance) auto.replanToday();
     if (before.enabled !== cfg.enabled) logAction({ kind: 'autopilot', detail: cfg.enabled ? '打开了自动养号' : '关掉了自动养号' });
@@ -462,17 +472,17 @@ const routes = {
     if (!memory.update(String(b.id || ''), { text: b.text, imp: b.imp })) throw new Error('没改成：找不到这条，或者内容是空的 / 没过安全检查');
     return memory.memoryView(15);
   },
+  'GET /api/memory/graph': async () => ({
+    memories: memory.graphData(),
+    facts: owner.readFacts().map((f) => ({ id: f.id, kind: f.kind, text: f.text, at: f.at })),
+    consts: { fuzzyR: 0.2, forgetR: Math.exp(-3) },
+  }),
   'POST /api/memory/tidy': async () => ({ result: await mind.tidyMemory(), ...memory.memoryView(15) }),
   'POST /api/social/check': async () => {
     if (!social.socialOn()) throw new Error('先打开「评论区社交」并配好模型');
     const r = await social.checkInbox({ essential: true });
     bust('unread', 'replyFeed');
     return { note: r.note, social: social.socialView() };
-  'GET /api/memory/graph': async () => ({
-    memories: memory.graphData(),
-    facts: owner.readFacts().map((f) => ({ id: f.id, kind: f.kind, text: f.text, at: f.at })),
-    consts: { fuzzyR: 0.2, forgetR: Math.exp(-3) },
-  }),
   },
 
   // QQ 提醒
@@ -515,6 +525,60 @@ const routes = {
     if (!text) throw new Error('写点什么再发');
     return auto.publishDiary(text, 'panel', { force: true });
   },
+
+  // ─── 贴吧 / 抖音：她自己去逛 ───────────────────────────────
+  'GET /api/web': async () => ({ ...webvisit.view(), browser: await web.status() }),
+  'POST /api/web/config': async (_q, b) => {
+    // 只收 web 这一段，别的字段一律不认 —— 避免又出现「保存时把整份 config 写回去」那种串味
+    const patch = b?.web && typeof b.web === 'object' ? b.web : b;
+    writeConfig({ web: patch });
+    return webvisit.view();
+  },
+  // 手动让她去逛一次（面板按钮）
+  'POST /api/web/run': async (_q, b) => {
+    const site = String(b.site || 'auto');
+    if (!['tieba', 'douyin', 'auto'].includes(site)) throw new Error('站点只能是 tieba / douyin / auto');
+    if (webvisit.isBusy()) throw new Error('她已经在逛了，等这一轮完');
+    webvisit.run({ site, reason: '面板点的' }).catch(() => {});
+    return { ok: true, started: site };
+  },
+  'POST /api/web/stop': async () => { webvisit.stop(); return { ok: true }; },
+  // 搜吧：面板上想找某个吧叫什么的时候用
+  'GET /api/web/forums': async (q) => {
+    const kw = String(q.get('q') || '').trim();
+    if (!kw) throw new Error('要一个关键词');
+    return { keyword: kw, list: await webvisit.searchForums(kw) };
+  },
+  // 某个站点现在能看到什么（面板上「先看一眼」用，不写任何东西）
+  'GET /api/web/browse': async (q) => {
+    const site = String(q.get('site') || 'tieba');
+    if (site === 'tieba') {
+      const forum = String(q.get('forum') || '').trim();
+      if (!forum) throw new Error('要一个吧名');
+      // forumThreads 给的是 { forum, page, threads }，这里统一成 list 给页面用
+      const r = await tieba.forumThreads(forum, { page: Number(q.get('page') || 0) });
+      return { site, forum, list: Array.isArray(r) ? r : (r?.threads || []) };
+    }
+    if (site === 'douyin') return { site, list: await douyin.hotVideos({ limit: 30 }) };
+    throw new Error('站点只能是 tieba / douyin');
+  },
+  // 看一个帖子 / 一条抖音（只读）
+  'GET /api/web/thread': async (q) => tieba.threadDetail(String(q.get('tid') || '')),
+  'GET /api/web/video': async (q) => {
+    const vid = String(q.get('vid') || '');
+    const [detail, commentsRaw] = await Promise.all([
+      douyin.videoDetail(vid).catch(() => null),
+      douyin.videoComments(vid, { limit: 30 }).catch(() => []),
+    ]);
+    // videoComments 把 loginWall / capped 挂在数组对象上，JSON.stringify 会丢掉，所以单独提出来
+    const comments = Array.isArray(commentsRaw) ? commentsRaw : [];
+    return { detail, comments, loginWall: !!commentsRaw?.loginWall, capped: !!commentsRaw?.capped };
+  },
+  // 登录态 + 扫码
+  'GET /api/web/login': async () => webvisit.loginState(),
+  'POST /api/web/login/qr': async (_q, b) => webvisit.loginQr(String(b.site || '')),
+  // 关掉浏览器（她逛完、或者卡住了要重开）
+  'POST /api/web/browser/close': async () => { await web.shutdown(); return { ok: true }; },
 };
 
 const server = createServer(async (req, res) => {
@@ -538,9 +602,21 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// 端口被占时不要甩未捕获异常：说明已经有一个面板在服务同一端口，
+// 本进程是多余的。以 0 退出，KeepAlive(SuccessfulExit=false) 才不会反复重拉成重启风暴。
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.log(`\n🐟 端口 ${PORT} 已被占用（多半是已经有一个养鱼面板在跑），本实例退出。\n`);
+    process.exit(0);
+  }
+  console.error(`\n🐟 面板服务出错：${err?.message || err}\n`);
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`\n🐟 养鱼面板已启动：http://${HOST}:${PORT}\n`);
   auto.startScheduler();
+  webvisit.startScheduler(); // 贴吧 / 抖音：一天插进去几次串门，跟 B站 那套作息互不干扰
   qq.start(); // 用小号时连 NapCat；用官方机器人时什么都不做
   // QQ 接入体检：DSH 自动升级后插件跟不上会静悄悄掉线，5 分钟看一眼
   setTimeout(() => health.check().catch(() => {}), 60_000);

@@ -233,3 +233,63 @@ type:dead-end
 
 - 08:20 [kind:fact] keepawake 状态更新（2026-10-21 08:2x）：用户已在昨晚手动装好 LaunchAgent 并确认运行。检查发现两点问题：①装的 plist 参数是 -dims（会连屏幕一起常亮，费电），workspace 版已改为 -ims；②模型会话里尝试 bootout+bootstrap 重新注册失败（bootstrap 报 5: Input/output error，cp 到 ~/Library/LaunchAgents 与 chmod 均报 Operation not permitted，属沙箱限制）。结果：LaunchAgent 现为 NOT_LOADED，但手动 caffeinate -ims（pid 73345/73347）在跑，休眠仍被挡住，重启后失效。已更新 ops/README.md：给出用户终端里的重装命令组（cp + bootout + bootstrap + print 验证）并说明 -dims→-ims 的差异与当前状态。
 - 08:22 [kind:fact] keepawake 最终验收通过（2026-10-21 08:3x）：用户在自己终端重装后，LaunchAgent com.mikejam.dsh-keepawake 状态 state=running，pid 73640，program=/usr/bin/caffeinate，arguments=-ims（只阻止系统休眠，不阻止屏幕熄）。电源断言实测：PreventSystemSleep=1、PreventUserIdleSystemSleep=1、PreventDiskIdle=1、PreventUserIdleDisplaySleep=0 —— 符合预期（屏幕仍可熄）。另清理了此前手动启动的重复 caffeinate 进程（案 73345/73347），现只剩 launchd 托管的一个。kill -9 73640 后 5 秒自动拉起新 pid 73640，KeepAlive 自愈验证通过。结论：熄屏掉线问题已彻底解决，开机自启+崩溃自愈有效。
+## 2026-11-02
+## 贴吧 / 抖音能力（新增「逛逛」页）
+
+源码：`panel/web.mjs`（浏览器引擎）、`panel/cdp.mjs`（CDP 客户端）、`panel/tieba.mjs`、
+`panel/douyin.mjs`（两个平台的能力层）、`panel/webvisit.mjs`（调度：「今天该去几次」）、
+`panel/public/web-page.js`（前端页）。
+
+### 为什么不用 MediaCrawler 这类现成框架
+GitHub 上确实有（NanmiCoder/MediaCrawler，支持抖音/贴吧/小红书等 7 个平台）。
+但它是 **Python + Playwright + 各平台 JS 签名逆向**，产出是结构化数据。
+这里要的是「她像人一样逛」不是采集，用真浏览器反而更简单、也不用维护签名算法。
+**别再纠结要不要引 Python 依赖**——Node 内置 + Chrome 就够了。
+
+### 三个必须踩对的坑（都是实测出来的）
+1. **Chrome 156 起校验 DevTools 的 WebSocket Origin**。Node 26 内置 WebSocket **不发 Origin 头**，
+   握手成功（HTTP 101）后立刻 1006 断开，命令一个都发不出去。表现是「连上了但什么都不返回」。
+   → `panel/cdp.mjs` 自己实现客户端，带 `Origin: http://127.0.0.1:<port>`。
+   ⚠️ 老的 `panel/browser.mjs`（B站 专用窗口）用的是全局 WebSocket，**同样会踩这个坑**，暂未改。
+2. **DSH 沙箱里 Chrome 直接起会崩**：`sandbox initialization failed` → GPU 进程反复崩溃 →
+   `FATAL: GPU process isn't usable. Goodbye.` 端口会先开、几百毫秒后进程死掉，
+   所以「端口通了」不代表能用。→ 启动后真发一条 `Browser.getVersion` + 再等 800ms 复查，
+   不行就退到 `--no-sandbox --disable-gpu --disable-dev-shm-usage`，可用模式记在 `data/web-browser.mode`。
+   崩死留下的 `Singleton*` / `DevToolsActivePort` 要清掉，否则新实例以为目录被占用。
+3. **贴吧桌面版永远 403「百度安全验证」**。可用的是移动版 `https://tieba.baidu.com/mo/q/m?kw=<urlencode>`。
+   而且**连续快请求也会触发验证** → 在 `webvisit` 层加退避重试（8s / 20s）。
+
+### 贴吧 DOM（和直觉不符，别按字面理解）
+- 列表：`ul.threads_list > li.tl_top`（置顶）/ `li.tl_shadow`，tid 在 `li[data-tid]`。
+  **不是** `li.medias_wrap.ordinary_thread`（那是别的页面的结构）。
+- `.pb-content-item` = **楼中楼的一条回复**，不是楼；`.pb-comment-item` 才是楼。
+- `.pb-content-wrap` 是**楼主正文**，不是楼层容器。
+- `.comment-content` 的 innerText 是脏的（会把楼层号/时间/地区/点赞数黏进来），正文要取 `.pb-rich-text` 里第一个 `.pb-content-item`。
+- 帖子页是前端渲染，`goto` 回来只有几十个字符，必须 `waitFor`。
+- 回复是虚拟列表，滚动后才补齐；**未登录最多只能看到一部分回复**（贴吧硬限制），返回里带 `truncated` 标记。
+- 计数写 `295W` 不是「295万」，`parseCount` 要同时认 `万/w/W/亿`。
+
+### 抖音未登录的真实边界（实测，别再猜）
+- **能**：`/hot` 热榜（首屏 10 条，滚动懒加载到 30 条）、`/video/<19位id>` 详情、
+  一级评论**最多 10 条**（页面出现「登录后可查看更多评论」，返回值挂 `loginWall`/`capped`）。
+- **不能**：`/`、`/jingxuan`、`/discover` 全被重定向成纯导航页（0 卡片）；
+  `/search/<kw>` 0 卡片且带验证码容器 → `searchVideos` 未登录**显式抛错**，不返回空数组（返回空等于骗调用方）。
+- **热榜卡片上的数字是点赞数，不是播放量**（实测 3/3 与详情页 `video-player-digg` 一致）。
+  所以 `playCount` 恒为 `null`，别再往面板上写「播放量」。
+- 作者不能取「第一个 `a[href*="/user/"]`」——描述里的 @ 提及也是这个形态，会拿错人。
+  要用 `[data-e2e="user-info"]` 的文本切「粉丝」前缀。
+- 登录按钮对 `el.click()` 无效，要 `Input.dispatchMouseEvent`，且**必须等 React 水合完**（等热榜卡片渲染出来）再点。
+
+### 写操作
+回帖 / 评论 / 点赞都要登录：未登录抛 `NOT_LOGGED_IN` / `loginRequired`，不静默失败。
+三层模式跟 B站 一致：`off` / `task`（放进任务箱等她来认领）/ `llm`（AI 起草进待审）。
+回帖另有每日上限 + 一轮硬上限（默认 2）：贴吧回帖比 B站 评论更容易被判定灌水。
+
+⚠️ **登录后的写操作链路没有真机验证过**（这台机器两个站点都没登录）。
+第一次真用之前建议人工盯一次：填输入框 → 点提交 → 等结果。
+选择器都是多候选兜底、找不到提交按钮会抛错而不是乱点，但也只是保守实现。
+
+### 排查用的探针脚本注意
+浏览器 CDP 连接会吊住事件循环，探针跑完必须 `process.exit(0)`，否则会卡到超时转后台。
+`panel/web.mjs` 的 `Page.eval` 默认 20 秒超时——点按钮后等结果要用「分段轮询」，
+别在一个 `eval` 里 `await sleep(45秒)`。

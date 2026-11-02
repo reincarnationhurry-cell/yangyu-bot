@@ -1,4 +1,4 @@
-# 🐟 云养鱼：一个有自己生活的 AI 伙伴
+# 🐟 dsh-fishmate：一个有自己生活的 AI 伙伴
 
 把 DeepSeek 养成一个住在 QQ 里的小伙伴。她不只是陪你聊天：你不在的时候，她自己刷 B站、看直播、逛贴吧、刷抖音，
 看到的东西会记住、会慢慢忘，第二天跟你说「我昨天刷到个……」。
@@ -33,7 +33,7 @@
 | 语音 | ffmpeg + edge-tts（`pipx install edge-tts`）；听语音要 mlx-whisper（Apple 芯片） |
 
 ```bash
-git clone <这个仓库> yangyu && cd yangyu
+git clone https://github.com/reincarnationhurry-cell/dsh-fishmate.git && cd dsh-fishmate
 ./install.sh          # macOS / Linux：检查依赖、开机自启、打开面板
 ```
 

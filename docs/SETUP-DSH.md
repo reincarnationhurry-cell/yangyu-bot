@@ -2,7 +2,7 @@
 
 这份是写给 **DeepSeek Harness（DSH）** 看的部署手册，也写给你看。你只要在 DSH 里说一句：
 
-> 按 https://github.com/reincarnationhurry-cell/yangyu-bot/blob/main/docs/SETUP-DSH.md 帮我部署，我要做的步骤停下来告诉我。
+> 按 https://github.com/reincarnationhurry-cell/dsh-fishmate/blob/main/docs/SETUP-DSH.md 帮我部署，我要做的步骤停下来告诉我。
 
 每一步都标了谁来做：
 
@@ -17,7 +17,7 @@
 ## 给 DSH 的几条规矩
 
 1. **别让号主把密钥、Cookie、密码贴进聊天。** 模型 Key、ModelScope 令牌都在面板网页里填，存在本机 `panel/data/secrets.json`；B站、QQ 都是手机扫码。
-2. 仓库克隆到 `~/yangyu-bot`，**别克隆进你现在这个工作区**：仓库根目录的 `AGENTS.md` 是她的人设，放进工作区你会变成她，还会把部署的工程笔记混进她的记忆。
+2. 仓库克隆到 `~/dsh-fishmate`，**别克隆进你现在这个工作区**：仓库根目录的 `AGENTS.md` 是她的人设，放进工作区你会变成她，还会把部署的工程笔记混进她的记忆。
 3. 每个 🙋 步骤停下来等号主回话，别跳过、别猜「应该好了」。
 4. 每个 🤖 步骤后面都有「核对」，没过就停下来把报错原样告诉号主，别自己去改仓库代码。
 5. Docker 镜像、Homebrew 这类第三方程序不要替号主下载安装，告诉他链接让他自己装。
@@ -44,16 +44,16 @@ ffmpeg -version | head -1   # 语音要用
 ## 1. 拿到代码 🤖
 
 ```bash
-git clone https://github.com/reincarnationhurry-cell/yangyu-bot.git ~/yangyu-bot
-cd ~/yangyu-bot
+git clone https://github.com/reincarnationhurry-cell/dsh-fishmate.git ~/dsh-fishmate
+cd ~/dsh-fishmate
 ```
 
-后面所有命令都在 `~/yangyu-bot` 里跑。
+后面所有命令都在 `~/dsh-fishmate` 里跑。
 
 ## 2. 装 B站 能力 🤖
 
 ```bash
-cd ~/yangyu-bot/bilibili-mcp && npm install && node apply-patch.mjs && node apply-patch.mjs --check
+cd ~/dsh-fishmate/bilibili-mcp && npm install && node apply-patch.mjs && node apply-patch.mjs --check
 ```
 
 核对：最后的 `--check` 退出码是 0（0 = 补丁已打上，1 = 没打上）。
@@ -61,7 +61,7 @@ cd ~/yangyu-bot/bilibili-mcp && npm install && node apply-patch.mjs && node appl
 ## 3. 启动面板 🤖
 
 ```bash
-cd ~/yangyu-bot && ./panel/install-launchd.sh
+cd ~/dsh-fishmate && ./panel/install-launchd.sh
 sleep 3 && curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8899
 ```
 
@@ -99,13 +99,13 @@ DeepSeek 官方开放平台、或者 DSH 本地网关都行。
 2. 🤖 生成 WebUI 密钥并启动 NapCat：
 
    ```bash
-   cd ~/yangyu-bot/panel/qq/napcat
+   cd ~/dsh-fishmate/panel/qq/napcat
    [ -f .env ] || echo "WEBUI_TOKEN=$(openssl rand -hex 16)" > .env
    docker compose up -d && docker compose ps
    ```
 
    核对：`napcat` 状态是 running。第一次要拉镜像，慢一点正常。
-   然后告诉号主密钥在 `~/yangyu-bot/panel/qq/napcat/.env` 里（让他自己打开看，别念出来）。
+   然后告诉号主密钥在 `~/dsh-fishmate/panel/qq/napcat/.env` 里（让他自己打开看，别念出来）。
 3. 🙋 打开 http://127.0.0.1:6099/webui ，输入密钥，用 **小号** 的手机 QQ 扫码登录。
    在「网络配置」里确认有一个 WebSocket 服务器、端口 3001、消息格式 **array**。
 4. 🙋 小号加你的大号为好友。
@@ -117,9 +117,9 @@ DeepSeek 官方开放平台、或者 DSH 本地网关都行。
 
 官方渠道更稳，但只能在你说话后一小时内回，不能主动找你。
 
-1. 🙋 在 DSH 设置 →「IM 助理」里接好 QQ 机器人，让 QQ 会话的工作目录指向 `~/yangyu-bot`（这样 `AGENTS.md` 就是她的人设）。
+1. 🙋 在 DSH 设置 →「IM 助理」里接好 QQ 机器人，让 QQ 会话的工作目录指向 `~/dsh-fishmate`（这样 `AGENTS.md` 就是她的人设）。
 2. 🤖 把 B站 MCP 接进 DSH：把 `bilibili-mcp/dsh-config.example.yml` 的内容追加到 `~/.dsh/profiles/desktop/cordis.patch.yml`，
-   `<QQ_BOT_DIR>` 全部换成 `~/yangyu-bot` 的**绝对路径**（`echo ~/yangyu-bot` 看一下）。改之前先备份原文件。
+   `<QQ_BOT_DIR>` 全部换成 `~/dsh-fishmate` 的**绝对路径**（`echo ~/dsh-fishmate` 看一下）。改之前先备份原文件。
 3. 🙋 重启 DSH。在 QQ 里跟她说「去B站搜搜猫猫」，她能回出视频就通了。
 
 ## 8. 外挂（可选）
@@ -128,7 +128,7 @@ DeepSeek 官方开放平台、或者 DSH 本地网关都行。
 
 - **查资料、看图**：要桌面版 DSH 开着。
   1. 🙋 在 DSH 插件市场装 `dsh-free-search`。
-  2. 🤖 `cd ~/yangyu-bot && ./panel/qq/dsh-profile/setup.sh`，核对最后打印 `✓ 她专用的 DSH 配置好了`。
+  2. 🤖 `cd ~/dsh-fishmate && ./panel/qq/dsh-profile/setup.sh`，核对最后打印 `✓ 她专用的 DSH 配置好了`。
 - **做新表情包**：
   🙋 ModelScope 账号绑定阿里云并实名，在 https://modelscope.cn/my/myaccesstoken 生成令牌，填进面板「QQ 连接 → ModelScope 访问令牌」。
 
@@ -152,5 +152,5 @@ DeepSeek 官方开放平台、或者 DSH 本地网关都行。
 | 面板打不开 | `panel/data/panel.err.log`；重启：`launchctl kickstart -k gui/$(id -u)/com.$(whoami).yangyu-panel` |
 | B站 掉登录 | 面板红条 → 扫码登录（扫她的号） |
 | 点赞 / 分享被拒 | 正常，B站 风控，面板会自动暂停那个动作，见 README「关于养号」 |
-| 小号没连上 | `cd ~/yangyu-bot/panel/qq/napcat && docker compose logs -f` |
+| 小号没连上 | `cd ~/dsh-fishmate/panel/qq/napcat && docker compose logs -f` |
 | 想卸载 | `./panel/install-launchd.sh uninstall`，小号的话再 `docker compose down` |

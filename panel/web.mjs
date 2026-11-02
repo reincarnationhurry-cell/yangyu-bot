@@ -227,31 +227,48 @@ async function launch(mode) {
     '--window-size=1280,900',
     'about:blank',
   ];
+  // 上一个实例留下的端口文件会让下面的轮询先连到一个已经死掉的端口上
+  try { rmSync(join(PROFILE, 'DevToolsActivePort'), { force: true }); } catch { /* 删不掉也只是多等一轮 */ }
   const child = spawn(findBrowser(), args, { detached: true, stdio: 'ignore' });
   child.on('error', () => {});
   child.unref();
-  let ws = null;
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 200));
-    const port = devToolsPort();
-    if (!port) continue;
-    ws = await liveWs(port);
-    if (ws) break;
+  let c = null;
+  try {
+    let ws = null;
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      const port = devToolsPort();
+      if (!port) continue;
+      ws = await liveWs(port);
+      if (ws) break;
+    }
+    if (!ws) throw new Error(`浏览器（${mode}）起不来：没有等到调试端口`);
+    c = await attach(ws);
+    // 端口开了不代表稳：沙箱里 Chrome 会因为 GPU 进程反复崩溃直接 FATAL 退出。
+    // 真发一条命令 + 再等一会儿确认它还活着，才算这个模式可用。
+    if (!(await alive(c))) throw new Error(`浏览器（${mode}）起来了但马上就没响应（多半是沙箱限制）`);
+    await new Promise((r) => setTimeout(r, 800));
+    if (c.closed || !(await alive(c))) throw new Error(`浏览器（${mode}）启动后很快就退出了（多半是沙箱限制）`);
+    return c;
+  } catch (err) {
+    // 这个模式不行：先把这次拉起来的 Chrome 杀干净，再让调用方清锁、换模式。
+    // 不杀的话它可能还活着占着配置目录，清掉 SingletonLock 后再起一个 = 两个实例写同一份配置。
+    c?.close();
+    await killTree(child.pid);
+    throw err;
   }
-  if (!ws) throw new Error(`浏览器（${mode}）起不来：没有等到调试端口`);
-  const c = await attach(ws);
-  // 端口开了不代表稳：沙箱里 Chrome 会因为 GPU 进程反复崩溃直接 FATAL 退出。
-  // 真发一条命令 + 再等一会儿确认它还活着，才算这个模式可用。
-  if (!(await alive(c))) {
-    c.close();
-    throw new Error(`浏览器（${mode}）起来了但马上就没响应（多半是沙箱限制）`);
+}
+
+/** detached 起的 Chrome 自成一个进程组，连同 GPU / 渲染子进程一起杀；等它真退出 */
+async function killTree(pid) {
+  if (!pid) return;
+  for (const sig of ['SIGTERM', 'SIGKILL']) {
+    try { process.kill(-pid, sig); } catch { try { process.kill(pid, sig); } catch { return; } }
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      try { process.kill(pid, 0); } catch { return; } // 已经没了
+    }
   }
-  await new Promise((r) => setTimeout(r, 800));
-  if (c.closed || !(await alive(c))) {
-    c.close();
-    throw new Error(`浏览器（${mode}）启动后很快就退出了（多半是沙箱限制）`);
-  }
-  return c;
 }
 
 /** 上次崩死留下的 Singleton* 会让新实例以为「配置目录正被占用」，清掉再起 */
@@ -305,7 +322,9 @@ export class Page {
 
   /** 打开页面并等 load；不是每次都能等到 loadEventFired，超时也当成功（SPA 会一直挂着） */
   async goto(url, { timeoutMs = 20000 } = {}) {
-    const loaded = this.c.waitEvent('Page.loadEventFired', timeoutMs).catch(() => null);
+    // 只认自己这个标签页的 load：几个标签页同时开着时（她在逛、面板上又点了「先看一眼」），
+    // 别被别的页面的 load 提前放行
+    const loaded = this.c.waitEvent('Page.loadEventFired', timeoutMs, this.sessionId).catch(() => null);
     await this.send('Page.navigate', { url });
     await loaded;
     return this;
@@ -407,7 +426,8 @@ export async function status() {
     profile: PROFILE,
     launchMode,
     headless: conn && !conn.closed ? !!conn.headless : !wantWindow(),
-    login: existsSync(join(PROFILE, 'Default', 'Cookies')),
+    // 以前这里有个 login：看 Cookies 文件在不在 —— 随便打开个网页它就在了，跟登没登录无关。
+    // 登录态看 /api/web/login（按各站点的登录 cookie 判断）。
   };
 }
 

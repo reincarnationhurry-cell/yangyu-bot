@@ -48,10 +48,16 @@ export function llmReady() {
  * 走同一个网关时，一条线路往往只需要写 model（比如 'gemini/gemini-3.8-flash'），
  * 地址和密钥都跟着顶层走 —— 不用为每个模型再配一份。
  */
+let warnedActive = null;
 function resolveProvider() {
   const cfg = readConfig().llm;
   const name = cfg.active || null;
   const p = name ? cfg.providers?.[name] : null;
+  if (name && !p && warnedActive !== name) {
+    // 线路名写错了：照旧走顶层配置，但喊一声，免得以为在用 Gemini 其实还在用默认模型
+    warnedActive = name;
+    console.warn(`[llm] llm.active 填的是「${name}」，但 llm.providers 里没有这条线路，先用顶层的 baseUrl / model`);
+  }
   if (p) {
     return {
       name,

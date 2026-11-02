@@ -101,23 +101,35 @@ export class CdpConnection extends EventEmitter {
     this.socket.write(Buffer.concat([head, mask, masked]));
   }
 
-  send(method, params = {}, sessionId) {
+  /**
+   * 发一条命令。默认 30 秒没回音就算失败 —— Chrome 卡死时，没有超时的 Promise 会永远挂着，
+   * 上层的「她正在逛」也就永远下不来，只能重启面板。
+   */
+  send(method, params = {}, sessionId, { timeoutMs = 30_000 } = {}) {
     if (this.closed) return Promise.reject(new Error('CDP 连接已关闭'));
     const id = ++this.seq;
     const msg = { id, method, params };
     if (sessionId) msg.sessionId = sessionId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const t = timeoutMs > 0 ? setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        reject(new Error(`浏览器 ${timeoutMs / 1000} 秒没回应（${method}）`));
+      }, timeoutMs) : null;
+      t?.unref?.();
+      const done = (fn) => (v) => { if (t) clearTimeout(t); fn(v); };
+      this.pending.set(id, { resolve: done(resolve), reject: done(reject) });
       this._frame(0x1, Buffer.from(JSON.stringify(msg)));
     });
   }
 
-  /** 等一个 CDP 事件（Page.loadEventFired 之类） */
-  waitEvent(method, timeoutMs = 15000) {
+  /** 等一个 CDP 事件（Page.loadEventFired 之类）。给了 sessionId 就只认那个标签页发来的 */
+  waitEvent(method, timeoutMs = 15000, sessionId) {
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => { this.off('event', on); reject(new Error(`等 ${method} 超时`)); }, timeoutMs);
       const on = (m) => {
-        if (m.method === method) { clearTimeout(t); this.off('event', on); resolve(m.params); }
+        if (m.method !== method) return;
+        if (sessionId && m.sessionId !== sessionId) return;
+        clearTimeout(t); this.off('event', on); resolve(m.params);
       };
       this.on('event', on);
     });

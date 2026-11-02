@@ -300,24 +300,24 @@ export const DEFAULT_CONFIG = {
       // 回帖：off 不回 / task 交给 QQ 里的她 / llm 本地起草（进待审）
       reply: { mode: 'task', chance: 0.12, dailyMax: 3, review: true },
       followChance: 0.2,
+      // 一天最多关注几个吧（关注不走审核，靠这个兜住）
+      followDailyMax: 2,
       // 一轮最多回几次（回帖比 B站 评论更容易被当成灌水）
       replyHardMax: 2,
     },
     douyin: {
       enabled: true,
-      // 未登录只有 /hot 能出内容；登录后 search / recommend 才好用
-      sources: ['hot'],
       videosMin: 2,
       videosMax: 5,
       watchMinSec: 10,
       watchMaxSec: 60,
       comments: { mode: 'task', chance: 0.08, dailyMax: 2, review: true },
       likeChance: 0.3,
+      // 一天最多点几个赞（点赞不走审核，靠这个兜住）
+      likeDailyMax: 10,
     },
     // 她的浏览器默认在后台无头跑，不弹窗口；想看她在干嘛再打开
     showWindow: false,
-    // 掉登录多久查一次（两个站点共用一个浏览器）
-    loginCheckMin: 60,
     quietStart: 1,
     quietEnd: 8,
   },
@@ -454,3 +454,23 @@ export function readVip() {
   return readJson(FILES.vip, { lastCheck: 0, nextCheck: 0, runAt: null, queue: [], handled: {}, done: {} });
 }
 export function writeVip(v) { writeJson(FILES.vip, v); }
+
+// ─── 写操作节流的时间戳（贴吧 / 抖音）─────────────────────
+/**
+ * 一个像 Map 一样用的、落盘的「上次什么时候做过」。
+ * 节流以前只在进程内存里：面板一重启就清零，task.mjs post 这种单独起的进程也看不到面板刚发过，
+ * 两边各算各的，30 秒的间隔形同虚设。存成文件后所有进程共用一份水位。
+ */
+export function persistentStamps(name) {
+  const file = join(DATA, 'web-throttle.json');
+  const all = () => readJson(file, {});
+  const mine = () => all()[name] || {};
+  const put = (m) => { const a = all(); a[name] = m; writeJson(file, a); };
+  return {
+    has: (k) => Object.prototype.hasOwnProperty.call(mine(), k),
+    get: (k) => mine()[k],
+    set(k, v) { put({ ...mine(), [k]: v }); return this; },
+    delete(k) { const m = mine(); delete m[k]; put(m); },
+    clear() { put({}); },
+  };
+}

@@ -22,6 +22,7 @@
  * 所以 hotVideos 返回的 playCount 恒为 null，真实数字在 likeCount 里。
  */
 import { openPage, browser } from './web.mjs';
+import { persistentStamps } from './store.mjs';
 
 const HOT_URL = 'https://www.douyin.com/hot';
 const videoUrl = (vid) => `https://www.douyin.com/video/${vid}`;
@@ -262,8 +263,9 @@ export function parseComment({ author, raw, stats } = {}) {
  * 任何一处漏了就是一次风控。默认点赞 20 秒、评论 30 秒，跟人手速差不多。
  * now 可注入，方便单测跳过 sleep。
  */
-export function createThrottle({ likeMs = 20000, commentMs = 30000, now = () => Date.now() } = {}) {
-  const last = new Map();
+export function createThrottle({ likeMs = 20000, commentMs = 30000, now = () => Date.now(), stamps } = {}) {
+  // stamps：落盘的时间戳（全局闸门用，跨进程、跨重启）；不给就只在内存里（单测用）
+  const last = stamps || new Map();
   const gapOf = (kind) => (kind === 'comment' ? commentMs : likeMs);
 
   return {
@@ -289,7 +291,7 @@ export function createThrottle({ likeMs = 20000, commentMs = 30000, now = () => 
 }
 
 /** 全局闸门：进程内所有写操作共用 */
-export const throttle = createThrottle();
+export const throttle = createThrottle({ stamps: persistentStamps('douyin') });
 
 /**
  * 动手前先过闸门。等不了就抛人话错误，绝不「先点了再说」。

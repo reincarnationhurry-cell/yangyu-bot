@@ -442,5 +442,7 @@ test('导出的 7 个能力 + loginState 都在，且没有偷偷依赖 npm 包'
   const { fileURLToPath } = await import('node:url');
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'douyin.mjs'), 'utf-8');
   const imports = [...src.matchAll(/^import\s.*?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
-  assert.deepEqual(imports, ['./web.mjs'], `只该依赖本地的 web.mjs，实际：${imports.join(', ')}`);
+  // 只许依赖本地模块（浏览器 web.mjs、落盘节流用的 store.mjs），不许偷偷引 npm 包
+  assert.ok(imports.every((m) => m.startsWith('./')), `只该依赖本地模块，实际：${imports.join(', ')}`);
+  assert.ok(imports.includes('./web.mjs'));
 });

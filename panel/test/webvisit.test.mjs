@@ -94,3 +94,61 @@ test('loginPoll / loginQr：只认 tieba / douyin', async () => {
   await assert.rejects(webvisit.loginPoll('weibo'), /站点只能是/);
   await assert.rejects(webvisit.loginQr('weibo'), /站点只能是/);
 });
+
+// ─── 中低优先级那批 ────────────────────────────────────────
+const { CdpConnection } = await import('../cdp.mjs');
+const { EventEmitter } = await import('node:events');
+const fakeSocket = () => Object.assign(new EventEmitter(), { written: [], write(b) { this.written.push(b); }, end() {} });
+
+test('cdp.send：浏览器不回话时按时超时，不会永远挂着', async () => {
+  const c = new CdpConnection(fakeSocket());
+  const t0 = Date.now();
+  await assert.rejects(c.send('Browser.getVersion', {}, undefined, { timeoutMs: 80 }), /没回应/);
+  assert.ok(Date.now() - t0 < 1000);
+  assert.equal(c.pending.size, 0, '超时的请求要从 pending 里清掉');
+});
+
+test('cdp.waitEvent：给了 sessionId 只认自己标签页的事件', async () => {
+  const c = new CdpConnection(fakeSocket());
+  const p = c.waitEvent('Page.loadEventFired', 1000, 'mine');
+  c.emit('event', { method: 'Page.loadEventFired', sessionId: 'other', params: { who: 'other' } });
+  c.emit('event', { method: 'Page.loadEventFired', sessionId: 'mine', params: { who: 'mine' } });
+  assert.deepEqual(await p, { who: 'mine' });
+});
+
+test('persistentStamps：落盘，换一个实例（等于换进程）也读得到', () => {
+  const a = store.persistentStamps('selftest');
+  a.clear();
+  assert.equal(a.has('reply'), false);
+  a.set('reply', 123);
+  const b = store.persistentStamps('selftest');
+  assert.equal(b.has('reply'), true);
+  assert.equal(b.get('reply'), 123);
+  b.delete('reply');
+  assert.equal(a.has('reply'), false);
+});
+
+test('saidToday：发出去的 + 待审里的 + 任务箱里的都占名额，别的站点不算', () => {
+  const before = webvisit.saidToday('tieba');
+  store.addReview({ kind: 'reply', text: '同感', payload: { site: 'tieba', tid: '1' } });
+  store.addTask({ type: 'tieba_reply', payload: { tid: '2', draft: '哈哈' }, note: 'x', source: 'auto' });
+  store.addReview({ kind: 'comment', text: '好看', payload: { site: 'douyin', vid: '3' } });
+  store.logAction({ kind: 'tb_reply', source: 'auto', target: '4', detail: '发了' });
+  assert.equal(webvisit.saidToday('tieba'), before + 3);
+});
+
+test('run：面板点的那一轮也能叫停（以前只有定时那轮能停）；叫停不算失败', async () => {
+  const cfg = store.readConfig();
+  store.writeConfig({ web: { tieba: { enabled: true, forums: ['猫'] } } });
+  try {
+    // run 在第一个 await 之前就装好了叫停开关，所以紧接着 stop() 能在开浏览器之前拦住
+    const p = webvisit.run({ site: 'tieba', reason: '测试' });
+    webvisit.stop();
+    const r = await p;
+    assert.equal(r.stopped, true, `应该是被叫停，实际 ${JSON.stringify(r)}`);
+    assert.equal(webvisit.isBusy(), false);
+    assert.equal((await web.status()).running, false, '叫停在开浏览器之前，不该拉起 Chrome');
+  } finally {
+    store.writeConfig({ web: cfg.web });
+  }
+});

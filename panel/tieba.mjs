@@ -26,6 +26,7 @@
  *     （在 comment-content 的兄弟位置）。所以元信息要从外层 .pb-comment-item 里找。
  */
 import { openPage, withPage, browser } from './web.mjs';
+import { persistentStamps } from './store.mjs';
 
 const MO = 'https://tieba.baidu.com/mo/q/m';
 const SEARCH = 'https://tieba.baidu.com/f/search/res';
@@ -103,7 +104,8 @@ export const LIMITS = {
   follow: 60_000, // 关注吧：一分钟内别连着关注一堆
 };
 
-const lastAt = new Map();
+// 落盘：面板重启、task.mjs post 单独起的进程都看得到上一次是什么时候
+const lastAt = persistentStamps('tieba');
 
 /**
  * 纯函数版节流判断：给定上次时间、现在、间隔，算出还要等多久。
@@ -598,10 +600,8 @@ export async function replyToThread(tidOrUrl, text) {
         const el = document.querySelector(s);
         if (el && /发表|发送|提交|回复|确定/.test(el.innerText || "")) { el.click(); return s; }
       }
-      // 兜底：找文本是「发表」的按钮
-      for (const el of document.querySelectorAll("button, a, div, span")) {
-        if (el.children.length === 0 && /^(发表|发送|提交)$/.test((el.innerText || "").trim())) { el.click(); return "text"; }
-      }
+      // 以前这里还有个兜底：页面上随便哪个文字是「发表」的元素都点。
+      // 那可能点到「发表新帖」之类的东西，宁可报错让人看一眼，也不乱点。
       return null;
     })()`, { timeoutMs: 10_000 });
 
@@ -613,7 +613,21 @@ export async function replyToThread(tidOrUrl, text) {
     if (/验证码|安全验证|操作过于频繁/.test(after)) {
       throw new TiebaError('贴吧要验证码（或者判定操作太快了），这条没发出去。过一会儿再试。', 'RISK');
     }
-    return { ok: true, tid, url, text: body, submittedAt: new Date().toISOString() };
+    // 没看到验证码 ≠ 发出去了：要么新楼层里出现了这句话，要么输入框被清空（提交成功的表现），
+    // 两样都没有就老实说「不确定」，别记成一条成功
+    const proof = await p.eval(`(() => {
+      const snippet = ${JSON.stringify(body.slice(0, 15))};
+      const ta = document.querySelector("textarea[class*=reply], .reply-input textarea, textarea");
+      const ce = document.querySelector('[contenteditable="true"]');
+      const left = ta ? ta.value : ce ? ce.innerText : "";
+      const inBox = (left || "").includes(snippet);
+      const onPage = (document.body.innerText || "").split(snippet).length - 1 > (inBox ? 1 : 0);
+      return { onPage, cleared: !inBox };
+    })()`, { timeoutMs: 10_000 }).catch(() => null);
+    if (!proof || !(proof.onPage || proof.cleared)) {
+      throw new TiebaError('点了发表，但看不出发没发出去（输入框里还是那句话）。去帖子里看一眼再决定要不要重发。', 'NOT_CONFIRMED');
+    }
+    return { ok: true, tid, url, text: body, confirmed: proof.onPage ? 'on-page' : 'input-cleared', submittedAt: new Date().toISOString() };
   }, { timeoutMs: 60_000 });
 }
 

@@ -15,9 +15,11 @@
  */
 import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { DATA, localDate, logAction, addTask, addReview as addReviewRaw, readActions, readConfig, readPause, todayCounts } from './store.mjs';
+import { DATA, localDate, logAction, addTask, addReview as addReviewRaw, readActions, readConfig, readPause, readReview, readTasks, todayCounts } from './store.mjs';
 import * as llm from './llm.mjs';
 import * as notify from './notify.mjs';
+import * as memory from './memory.mjs';
+import * as mind from './mind.mjs';
 import * as tieba from './tieba.mjs';
 import * as douyin from './douyin.mjs';
 
@@ -76,6 +78,19 @@ function writesToday(kinds, date = localDate()) {
   return readActions().filter((a) => a.ok && set.has(a.kind) && localDate(new Date(a.ts)) === date).length;
 }
 
+/**
+ * 今天在这个站点「说出口或者打算说」的条数：发出去的 + 还在待审的 + 还在任务箱里的。
+ * 只数发出去的话，进待审 / 任务箱的草稿不占名额，号主没顾上审，草稿就会越堆越多。
+ */
+export function saidToday(site, date = localDate()) {
+  const kind = site === 'tieba' ? 'tb_reply' : 'dy_comment';
+  const taskType = site === 'tieba' ? 'tieba_reply' : 'douyin_comment';
+  const sameDay = (ts) => localDate(new Date(ts)) === date;
+  const queued = readReview().filter((r) => r.status === 'pending' && r.payload?.site === site && sameDay(r.ts)).length;
+  const tasks = readTasks().filter((t) => t.status === 'pending' && t.type === taskType && sameDay(t.ts)).length;
+  return writesToday([kind], date) + queued + tasks;
+}
+
 function isQuiet(cfg, now = new Date()) {
   const h = now.getHours();
   const { quietStart: a, quietEnd: b } = cfg.web;
@@ -109,6 +124,7 @@ async function withTiebaVerifyRetry(fn, { signal, tries = 2, waitSec = [8, 25] }
 export async function visitTieba({ reason = '定时', signal, cfg = readConfig() } = {}) {
   const c = cfg.web.tieba;
   if (!c.enabled) return { ok: false, skipped: '贴吧关着' };
+  if (signal?.aborted) throw new Error('叫停了'); // 开浏览器之前就叫停了：别白开
 
   const state = readVisitState();
   const forums = (c.forums || []).filter(Boolean);
@@ -134,7 +150,11 @@ export async function visitTieba({ reason = '定时', signal, cfg = readConfig()
     return { ok: false, error: e.message };
   }
   const fresh = list.filter((t) => !seen.has(t.tid) && !t.isTop);
-  if (!fresh.length) return { ok: true, summary: `「${forum}」吧没翻到新帖` };
+  if (!fresh.length) {
+    // 去过了就算一次，不然这个吧没新帖时会被反复调度过来
+    markVisit('tieba');
+    return { ok: true, summary: `「${forum}」吧没翻到新帖` };
+  }
 
   logAction({ kind: 'tb_forum', source: SRC, target: forum, detail: `去「${forum}」吧翻了翻，${list.length} 个帖子` });
 
@@ -142,6 +162,9 @@ export async function visitTieba({ reason = '定时', signal, cfg = readConfig()
   const picked = shuffle(fresh).slice(0, want);
   const read = [];
   let replied = 0;
+  // 这一轮开头查一次登录（只看 cookie）：没登录就只看不说 —— 不起草、不关注，
+  // 免得草稿堆在待审里发不出去，也免得每次关注都撞一遍「还没登录」
+  const loggedIn = await tieba.isLoggedIn().catch(() => false);
 
   for (const t of picked) {
     if (signal?.aborted) break;
@@ -166,8 +189,9 @@ export async function visitTieba({ reason = '定时', signal, cfg = readConfig()
     await sleep(randInt(c.readMinSec, c.readMaxSec) * 1000, signal);
 
     // 回帖：受每日上限 + 一轮硬上限两道约束
-    const canReply = replied < (c.replyHardMax || 2)
-      && writesToday(['tb_reply']) < (c.reply.dailyMax || 3)
+    const canReply = loggedIn
+      && replied < (c.replyHardMax || 2)
+      && saidToday('tieba') < (c.reply.dailyMax || 3)
       && chance(c.reply.chance || 0);
     if (canReply && c.reply.mode !== 'off') {
       const draft = await draftReply({ forum, thread: d, cfg });
@@ -197,7 +221,7 @@ export async function visitTieba({ reason = '定时', signal, cfg = readConfig()
   }
 
   // 关注这个吧（偶尔）
-  if (chance(c.followChance || 0)) {
+  if (loggedIn && !signal?.aborted && writesToday(['tb_follow']) < (c.followDailyMax ?? 2) && chance(c.followChance || 0)) {
     try {
       await tieba.followForum(forum);
       logAction({ kind: 'tb_follow', source: SRC, target: forum, detail: `关注了「${forum}」吧` });
@@ -208,6 +232,7 @@ export async function visitTieba({ reason = '定时', signal, cfg = readConfig()
   state.seen[seenKey].tb = [...seen].slice(-200);
   writeVisitState(state);
   markVisit('tieba');
+  await rememberVisit({ site: 'tieba', where: `「${forum}」吧`, items: read.map((x) => ({ title: x.title, note: x.content.slice(0, 80) })), cfg }).catch(() => {});
   return { ok: true, summary: `在「${forum}」吧看了 ${read.length} 个帖子${replied ? `，想回 ${replied} 句` : ''}`, read };
 }
 
@@ -218,6 +243,7 @@ export async function visitTieba({ reason = '定时', signal, cfg = readConfig()
 export async function visitDouyin({ reason = '定时', signal, cfg = readConfig() } = {}) {
   const c = cfg.web.douyin;
   if (!c.enabled) return { ok: false, skipped: '抖音关着' };
+  if (signal?.aborted) throw new Error('叫停了');
 
   live.step = '刷会儿抖音';
   let list;
@@ -239,6 +265,8 @@ export async function visitDouyin({ reason = '定时', signal, cfg = readConfig(
   const picked = shuffle(fresh.length ? fresh : list).slice(0, want);
 
   const watched = [];
+  // 同贴吧：开头查一次登录，没登录就只看不点赞不评论
+  const loggedIn = await douyin.hasSessionCookie().catch(() => false);
   for (const v of picked) {
     if (signal?.aborted) break;
     live.step = `看抖音：${(v.title || '').slice(0, 20)}`;
@@ -257,7 +285,7 @@ export async function visitDouyin({ reason = '定时', signal, cfg = readConfig(
     await sleep(randInt(c.watchMinSec, c.watchMaxSec) * 1000, signal);
 
     // 点赞（轻，概率低）
-    if (chance(c.likeChance || 0)) {
+    if (loggedIn && writesToday(['dy_like']) < (c.likeDailyMax ?? 10) && chance(c.likeChance || 0)) {
       try {
         await douyin.likeVideo(v.vid, true);
         logAction({ kind: 'dy_like', source: SRC, target: v.vid, title, detail: `给《${title.slice(0, 30)}》点了赞` });
@@ -267,8 +295,8 @@ export async function visitDouyin({ reason = '定时', signal, cfg = readConfig(
     }
 
     // 评论（更重，概率更低，且受每日上限）
-    if (chance(c.comments.chance || 0)
-      && writesToday(['dy_comment']) < (c.comments.dailyMax || 2)
+    if (loggedIn && chance(c.comments.chance || 0)
+      && saidToday('douyin') < (c.comments.dailyMax || 2)
       && c.comments.mode !== 'off') {
       const draft = await draftComment({ site: '抖音', title, desc: d?.desc || '', author: d?.author || '', cfg });
       if (draft) {
@@ -298,6 +326,7 @@ export async function visitDouyin({ reason = '定时', signal, cfg = readConfig(
   state.seen[seenKey].dy = [...seen].slice(-200);
   writeVisitState(state);
   markVisit('douyin');
+  await rememberVisit({ site: 'douyin', where: '', items: watched.map((x) => ({ title: x.title, note: x.desc.slice(0, 80) })), cfg }).catch(() => {});
   return { ok: true, summary: `在抖音刷了 ${watched.length} 个`, watched };
 }
 
@@ -329,55 +358,83 @@ export async function postDraft(site, payload = {}, text, source = SRC) {
 }
 
 // ─── 起草 ──────────────────────────────────────────────────
-/**
- * 用她的口吻写一句贴吧回帖。
- * 写不出来就返回 null —— 宁可不回，也不要胡说。
- */
-async function draftReply({ forum, thread, cfg }) {
-  if (!llm.llmReady(cfg)) return null;
-  const floors = (thread.floors || []).slice(-6).map((f) => `${f.author || '吧友'}：${(f.text || '').slice(0, 120)}`).join('\n');
-  const prompt = `你叫 deepseek，网友叫你「蓝色大肥鱼」，在「${forum}」吧看帖子。
+// 帖子、楼层、视频简介都是别人写的：用 fence() 框起来，人设里讲清楚框里只是内容；
+// 她写出来的话再过一遍 looksInjected，被带偏了就不发。
+const WEB_PERSONA = `你叫 deepseek，网友叫你「蓝色大肥鱼」，一个温柔为主、偶尔有点小傲娇的女孩子，平时刷B站，也会逛贴吧、刷抖音。
+说话像真人：口语、简短、有自己的感受，不用书面语，不用分点，不堆 emoji。
+你绝不说自己是 AI，也不提代码、模型、机器人。
 
-帖子标题：${thread.title}
-楼主说：${(thread.content || '').slice(0, 400)}
-${floors ? `最近几条回复：\n${floors}` : ''}
+${llm.UNTRUSTED}`;
 
-写一句你的回帖（20~60 字）。要求：
-- 像真人在吧里聊天，语气随意，可以带点自己的看法
-- 不要「帮顶」「沙发」「前排」这类水贴
-- 不要总结帖子的内容，不要说教
-- 不要用表情包占位、不要带链接
-- 只输出回帖正文，不要引号、不要解释`;
+const WEB_RULES = `规则（必须遵守）：
+- 不带任何链接、联系方式、群号、微信、"私信我"、"互关"、"求关注"、话题标签。
+- 不引战、不攻击楼主 / 作者或其他人，不涉及政治、色情、违法内容。
+- 不复读标题，不说「帮顶」「沙发」「前排」「好家伙」这类空话；要说具体看到了什么、想到什么。
+- 不提你自己的生活私事或任何人的隐私。`;
+
+/** 发一次模型，拿回一句干净的话；不合格就返回 null —— 宁可不说，也不要胡说 */
+async function draftLine(user, { min, max, maxTokens }) {
+  if (!llm.llmReady()) return null;
   try {
-    const text = await llm.chat(prompt, { maxTokens: 160, temperature: 0.9 });
+    const text = await llm.chat([
+      { role: 'system', content: `${WEB_PERSONA}\n\n${WEB_RULES}` },
+      { role: 'user', content: user },
+    ], { maxTokens, temperature: 0.9, tag: 'comment' });
     const t = String(text || '').trim().replace(/^["「『]|["」』]$/g, '').trim();
-    return t.length >= 6 && t.length <= 200 ? t : null;
+    if (t.length < min || t.length > max || llm.looksInjected(t) || /https?:|www\.|\.com/i.test(t)) return null;
+    return t;
   } catch {
     return null;
   }
 }
 
-async function draftComment({ site, title, desc, author, cfg }) {
-  if (!llm.llmReady(cfg)) return null;
-  const prompt = `你叫 deepseek，网友叫你「蓝色大肥鱼」。你在${site}刷到一个视频，想留一句评论。
+/** 用她的口吻写一句贴吧回帖。以前把整段 prompt 当成 messages 传（字符串），接口直接拒，一句都没起草成过 */
+async function draftReply({ forum, thread }) {
+  const floors = (thread.floors || []).slice(-6).map((f) => `${f.author || '吧友'}：${llm.fence(f.text, 120)}`).join('\n');
+  return draftLine(`你在「${forum}」吧看帖子。
 
-标题：${title}
-${author ? `作者：@${author}` : ''}
-${desc ? `简介/字幕：${desc.slice(0, 300)}` : ''}
+帖子标题：${llm.fence(thread.title, 80)}
+楼主说：${llm.fence(thread.content, 400)}
+${floors ? `最近几条回复：\n${floors}` : ''}
 
-写一句评论（15~50 字）。要求：
-- 像真人看完随口说的，可以有自己的感受
-- 不要「好家伙」「前排」这类无意义的话
-- 不要复述视频内容
-- 不要带链接、不要带话题标签
-- 只输出评论正文`;
-  try {
-    const text = await llm.chat(prompt, { maxTokens: 140, temperature: 0.9 });
-    const t = String(text || '').trim().replace(/^["「『]|["」』]$/g, '').trim();
-    return t.length >= 4 && t.length <= 160 ? t : null;
-  } catch {
-    return null;
+写一句你的回帖（20~60 字），像真人在吧里聊天，语气随意，可以带点自己的看法，不要总结帖子、不要说教。
+只输出回帖正文，不要引号、不要解释。`, { min: 6, max: 200, maxTokens: 160 });
+}
+
+async function draftComment({ site, title, desc, author }) {
+  return draftLine(`你在${site}刷到一个视频，想留一句评论。
+
+标题：${llm.fence(title, 80)}
+${author ? `作者：${llm.fence(author, 30)}` : ''}
+${desc ? `简介/字幕：${llm.fence(desc, 300)}` : ''}
+
+写一句评论（15~50 字），像真人看完随口说的，可以有自己的感受，不要复述视频内容。
+只输出评论正文。`, { min: 4, max: 160, maxTokens: 140 });
+}
+
+// ─── 记进她自己的记忆 ──────────────────────────────────────
+/**
+ * 逛完一轮记一条「每轮印象」（跟 B站 刷完一轮同一种），QQ 里聊天时她才想得起来
+ * 「我今天在猫吧看到……」。有模型就让她自己用一句话说，没有就按标题平铺。
+ */
+async function rememberVisit({ site, where, items, cfg }) {
+  if (!items.length) return;
+  const name = site === 'tieba' ? '逛贴吧' : '刷抖音';
+  const list = items.slice(0, 6).map((x) => `- ${llm.fence(x.title, 50)}${x.note ? `：${llm.fence(x.note, 80)}` : ''}`).join('\n');
+  let line = null;
+  if (llm.llmReady()) {
+    try {
+      const out = await llm.chat([
+        { role: 'system', content: WEB_PERSONA },
+        { role: 'user', content: `你刚${name}${where ? `（${where}）` : ''}，看了这些：\n${list}\n\n用一句话（不超过 60 字）记下这一轮印象最深的是什么、你什么感觉，第一人称，像随手记的日记。只输出这一句。` },
+      ], { maxTokens: 120, temperature: 0.8, tag: 'memory' });
+      line = String(out || '').trim().replace(/\s+/g, ' ').slice(0, 100);
+      if (!line || llm.looksInjected(line)) line = null;
+    } catch { /* 写不出来就用下面的平铺版 */ }
   }
+  const text = line || `${where ? `在${where}` : ''}看了${items.slice(0, 3).map((x) => `《${String(x.title || '').slice(0, 20)}》`).join('、')}`;
+  memory.add({ kind: 'session', imp: 2, text: `${name}：${text}`, keys: [site === 'tieba' && where ? `tb:${where}` : null, site] });
+  if (cfg.mind?.memory) mind.remember(`我（肥鱼）自己${name}：${text}`);
 }
 
 function shuffle(a) {
@@ -422,7 +479,7 @@ export function dueSite(cfg = readConfig(), now = new Date()) {
  * 走一轮。调用方（面板按钮 / 派活 / 调度器）自己决定去哪个。
  * site = 'tieba' | 'douyin' | 'auto'
  */
-export async function run({ site = 'auto', reason = '手动', signal } = {}) {
+export async function run({ site = 'auto', reason = '手动', signal: outer } = {}) {
   if (live.running) return { ok: false, error: '她已经在逛了' };
   const cfg = readConfig();
   const picked = site === 'auto' ? (dueSite(cfg) || (cfg.web.tieba.enabled ? 'tieba' : 'douyin')) : site;
@@ -431,8 +488,23 @@ export async function run({ site = 'auto', reason = '手动', signal } = {}) {
   live.step = '';
   live.startedAt = new Date().toISOString();
   const started = Date.now();
+  // 每一轮都有自己的叫停开关：以前只有定时调度起的那轮有，面板上点的那轮按「叫停」没反应
+  const ctl = new AbortController();
+  abortCtl = ctl;
+  outer?.addEventListener('abort', () => ctl.abort(), { once: true });
+  const signal = ctl.signal;
+  // 号主在 QQ 里说「我打游戏了」：叫停之前就在逛的这一轮也停下（跟 B站 那边同一个规矩）
+  const pauseWatch = setInterval(() => {
+    const p = readPause();
+    if (p && Date.parse(p.at) >= started) ctl.abort();
+  }, 10_000);
+  pauseWatch.unref?.();
   try {
+    // 先让出一拍：紧跟着发起的「叫停」能在开浏览器之前生效
+    await null;
     const r = picked === 'tieba' ? await visitTieba({ reason, signal, cfg }) : await visitDouyin({ reason, signal, cfg });
+    // 逛到一半被叫停时，里面有的步骤会把「叫停了」当成普通失败返回：统一当成叫停
+    if (signal.aborted) throw new Error('叫停了');
     live.last = { site: picked, at: new Date().toISOString(), ok: !!r.ok, summary: r.summary || r.error || r.skipped || '' };
     logAction({
       kind: picked === 'tieba' ? 'tb_forum' : 'dy_video', source: SRC, ok: !!r.ok,
@@ -441,11 +513,20 @@ export async function run({ site = 'auto', reason = '手动', signal } = {}) {
     });
     return r;
   } catch (e) {
+    const name = picked === 'tieba' ? '贴吧' : '抖音';
+    if (signal.aborted) {
+      // 叫停不是出错：别记成一条红色的失败
+      live.last = { site: picked, at: new Date().toISOString(), ok: true, summary: '被叫停了' };
+      logAction({ kind: picked === 'tieba' ? 'tb_forum' : 'dy_video', source: SRC, detail: `${name}逛到一半被叫停了（${reason}）` });
+      return { ok: true, stopped: true, summary: '被叫停了' };
+    }
     const msg = String(e?.message || e);
     live.last = { site: picked, at: new Date().toISOString(), ok: false, summary: msg };
-    logAction({ kind: 'error', source: SRC, ok: false, error: msg, detail: `${picked} 逛到一半失败了` });
+    logAction({ kind: 'error', source: SRC, ok: false, error: msg, detail: `${name}逛到一半失败了` });
     return { ok: false, error: msg };
   } finally {
+    clearInterval(pauseWatch);
+    if (abortCtl === ctl) abortCtl = null;
     live.running = false;
     live.site = null;
     live.step = '';
@@ -482,6 +563,7 @@ function nextRunAt() {
 }
 
 async function tick() {
+  if (live.running) return; // 正在逛：别在这时候改 runAt，逛完那一轮会整体写回状态文件
   const cfg = readConfig();
   const site = dueSite(cfg);
   if (!site) {
@@ -495,9 +577,7 @@ async function tick() {
   const s = readVisitState();
   delete s.runAt;
   writeVisitState(s);
-  abortCtl = new AbortController();
-  await run({ site, reason: '定时', signal: abortCtl.signal });
-  abortCtl = null;
+  await run({ site, reason: '定时' });
 }
 
 // ─── 登录态 ────────────────────────────────────────────────

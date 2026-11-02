@@ -101,6 +101,7 @@ async function pageWeb(main) {
           ${sel('web.tieba.reply.mode', '回帖', [['off', '不回，只看'], ['task', '交给她在 QQ 里回'], ['llm', 'AI 起草']])}
           ${num('web.tieba.reply.chance', '一个帖子回的概率 %', { pct: 1, max: 100 })}
           ${num('web.tieba.reply.dailyMax', '一天最多回几条', { max: 10 })}
+          ${num('web.tieba.followDailyMax', '一天最多关注几个吧', { max: 10 })}
           ${tog('web.tieba.reply.review', 'AI 回帖先给我审', '贴吧回帖是公开的')}
         </div>
       </div>
@@ -113,6 +114,7 @@ async function pageWeb(main) {
           ${num('web.douyin.watchMinSec', '一条至少看几秒', { max: 300 })}
           ${num('web.douyin.watchMaxSec', '一条最多看几秒', { max: 600 })}
           ${num('web.douyin.likeChance', '点赞概率 %', { pct: 1, max: 100 })}
+          ${num('web.douyin.likeDailyMax', '一天最多点几个赞', { max: 50 })}
           ${sel('web.douyin.comments.mode', '评论', [['off', '不评论'], ['task', '交给她在 QQ 里评论'], ['llm', 'AI 起草']])}
           ${num('web.douyin.comments.dailyMax', '一天最多评论几条', { max: 10 })}
         </div>

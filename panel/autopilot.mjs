@@ -996,8 +996,9 @@ export async function runTask(task) {
   };
   try {
     const webSite = webvisit.TASK_SITE[task.type];
+    const webRun = { web_tieba: 'tieba', web_douyin: 'douyin' }[task.type]; // 号主让她去逛一轮
     // 贴吧 / 抖音的活跟 B站 那轮不抢，不用等
-    if (live.running && !webSite) {
+    if (live.running && !webSite && !webRun) {
       updateTask(task.id, { resultNote: '她正在刷，这轮完了就去' });
       while (live.running) await bili.sleep(10_000);
     }
@@ -1006,6 +1007,10 @@ export async function runTask(task) {
     if (webSite) {
       const r = await webvisit.postDraft(webSite, task.payload, task.payload?.draft, SRC);
       note = `发出去了：${r.text.slice(0, 60)}`;
+    } else if (webRun) {
+      const r = await webvisit.run({ site: webRun, reason: '号主让去的' });
+      ok = !!r.ok;
+      note = r.summary || r.error || r.skipped || '';
     } else if (task.type === 'diary') note = await diaryNow();
     else if (task.type === 'check') note = await inboxNow();
     else {

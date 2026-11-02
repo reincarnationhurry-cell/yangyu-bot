@@ -314,6 +314,8 @@ export const DEFAULT_CONFIG = {
       comments: { mode: 'task', chance: 0.08, dailyMax: 2, review: true },
       likeChance: 0.3,
     },
+    // 她的浏览器默认在后台无头跑，不弹窗口；想看她在干嘛再打开
+    showWindow: false,
     // 掉登录多久查一次（两个站点共用一个浏览器）
     loginCheckMin: 60,
     quietStart: 1,

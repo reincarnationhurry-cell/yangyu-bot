@@ -51,3 +51,46 @@ test('approveReview：带 site 的待审走 postDraft，不掉进 B站 发评论
   // 没发成就还留在待审里，号主可以再批一次
   assert.equal(store.readReview().find((x) => x.id === r.id).status, 'pending');
 });
+
+const douyin = await import('../douyin.mjs');
+
+test('hasSession：抖音登录会话认 sessionid / sessionid_ss / sid_tt，空值和别的域名不认', () => {
+  assert.equal(douyin.hasSession([{ name: 'sessionid', domain: '.douyin.com', value: 'x' }]), true);
+  assert.equal(douyin.hasSession([{ name: 'sid_tt', domain: 'www.douyin.com', value: 'x' }]), true);
+  assert.equal(douyin.hasSession([{ name: 'sessionid', domain: '.douyin.com', value: '' }]), false);
+  assert.equal(douyin.hasSession([{ name: 'sessionid', domain: '.notdouyin.com', value: 'x' }]), false);
+  assert.equal(douyin.hasSession([{ name: 'ttwid', domain: '.douyin.com', value: 'x' }]), false);
+});
+
+test('douyin.loginQr({keep})：成功时标签页留着并交回去，默认照旧关掉', async () => {
+  const mkPage = () => ({
+    closed: false,
+    interruptible: true,
+    async eval(expr) {
+      if (expr.includes('/video/')) return true;
+      if (expr.includes('getBoundingClientRect')) return null;
+      return true; // 登录框已经在了
+    },
+    async screenshot() { return 'PNG'; },
+    async send() { return {}; },
+    async close() { this.closed = true; },
+  });
+  let page = mkPage();
+  douyin.__setPageOpener(async () => page);
+  try {
+    const kept = await douyin.loginQr({ keep: true });
+    assert.equal(kept.page, page);
+    assert.equal(page.closed, false, '扫码要靠这个标签页，不能关');
+    page = mkPage();
+    const plain = await douyin.loginQr();
+    assert.equal(plain.page, undefined);
+    assert.equal(page.closed, true);
+  } finally {
+    douyin.__setPageOpener(null);
+  }
+});
+
+test('loginPoll / loginQr：只认 tieba / douyin', async () => {
+  await assert.rejects(webvisit.loginPoll('weibo'), /站点只能是/);
+  await assert.rejects(webvisit.loginQr('weibo'), /站点只能是/);
+});

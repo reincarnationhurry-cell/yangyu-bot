@@ -178,8 +178,9 @@ export async function loginState() {
  * 直接抓 img 会拿到一个随时会过期的 URL，面板还得自己再请求一次；
  * 截图就是「他眼睛看到的东西」，扫不出来才是我们的问题。
  */
-export async function loginQr() {
+export async function loginQr({ keep = false } = {}) {
   const page = await openPage(PASSPORT, { timeoutMs: 30_000 });
+  let ok = false;
   try {
     // 二维码是控件异步画的，等它真的画出来再截
     await page
@@ -198,10 +199,13 @@ export async function loginQr() {
       : null;
     const png = shot || await page.screenshot();
     const loggedIn = await isLoggedIn();
-    return { png, loggedIn, url: await page.url() };
+    const out = { png, loggedIn, url: await page.url() };
+    ok = true;
+    return keep ? { ...out, page } : out;
   } finally {
-    // 留一张页面没意义；二维码过期了下次再开
-    await page.close().catch(() => {});
+    // keep=true 时标签页必须留着：手机上点确认之后，是这个页面在轮询、拿 BDUSS。
+    // 截完图就关掉 = 手机显示成功，浏览器这边永远登不上。
+    if (!keep || !ok) await page.close().catch(() => {});
   }
 }
 

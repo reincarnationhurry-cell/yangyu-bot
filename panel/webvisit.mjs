@@ -512,23 +512,71 @@ export async function forumThreads(name, { page = 0 } = {}) {
   return Array.isArray(r) ? r : (r?.threads || []);
 }
 
-/** 两个站点各自有没有登录（面板顶部和「逛逛」页要用） */
+/**
+ * 两个站点各自有没有登录（面板顶部和「逛逛」页要用）。
+ * 统一成 { ok, why, nickname }：两个站点模块返回的是 loggedIn，面板读的是 ok，
+ * 以前没对齐，登上了面板也一直显示「未登录」。
+ */
 export async function loginState() {
-  const out = { tieba: { ok: false, why: '' }, douyin: { ok: false, why: '' } };
-  try {
-    out.tieba = await tieba.loginState();
-  } catch (e) { out.tieba.why = e.message; }
-  try {
-    out.douyin = await douyin.loginState();
-  } catch (e) { out.douyin.why = e.message; }
-  return out;
+  const one = async (fn) => {
+    try {
+      const r = await fn();
+      return { ok: !!r?.loggedIn, why: '', nickname: r?.nickname || '' };
+    } catch (e) {
+      return { ok: false, why: e.message, nickname: '' };
+    }
+  };
+  return { tieba: await one(tieba.loginState), douyin: await one(douyin.loginState) };
 }
 
-/** 打开某站点的登录页，把二维码截出来给面板显示 */
+// 扫码登录的标签页要一直开着，直到登上或过期：手机上点了确认，是这个页面在轮询、拿 cookie。
+const LOGIN_PAGE_TTL = 5 * 60_000;
+const loginPages = {}; // site → { page, timer }
+
+async function dropLoginPage(site) {
+  const lp = loginPages[site];
+  if (!lp) return;
+  delete loginPages[site];
+  clearTimeout(lp.timer);
+  await Promise.resolve(lp.page.close?.()).catch(() => {});
+}
+
+function checkSite(site) {
+  if (site !== 'tieba' && site !== 'douyin') throw new Error('站点只能是 tieba 或 douyin');
+}
+
+/** 打开某站点的登录页，把二维码截出来给面板显示；标签页留着等扫码 */
 export async function loginQr(site) {
-  if (site === 'tieba') return tieba.loginQr();
-  if (site === 'douyin') return douyin.loginQr();
-  throw new Error('站点只能是 tieba 或 douyin');
+  checkSite(site);
+  await dropLoginPage(site); // 换一张：旧的那页关掉
+  const { page, ...out } = site === 'tieba' ? await tieba.loginQr({ keep: true }) : await douyin.loginQr({ keep: true });
+  if (page) {
+    const timer = setTimeout(() => { dropLoginPage(site); }, LOGIN_PAGE_TTL);
+    timer.unref?.();
+    loginPages[site] = { page, timer };
+    // 把这页切到前台：抖音新设备扫码后常要在网页上再验证一步，他得看得见
+    await page.c?.send('Target.activateTarget', { targetId: page.targetId }).catch(() => {});
+  }
+  return { ...out, expiresAt: Date.now() + LOGIN_PAGE_TTL };
+}
+
+/**
+ * 扫码后面板每隔两秒问一次：登上了没有。
+ * 只看 cookie（便宜），登上了就把登录页关掉。没登上时看看页面是不是在要第二步验证。
+ */
+export async function loginPoll(site) {
+  checkSite(site);
+  const loggedIn = site === 'tieba' ? await tieba.isLoggedIn() : await douyin.hasSessionCookie();
+  if (loggedIn) {
+    await dropLoginPage(site);
+    return { status: 'ok' };
+  }
+  const lp = loginPages[site];
+  if (!lp) return { status: 'expired' };
+  const text = String(await lp.page.text().catch(() => '') || '');
+  if (/短信|验证码已发送|身份验证|安全验证|请完成验证/.test(text)) return { status: 'verify' };
+  if (/扫码成功|已扫码|请在手机上确认|确认登录/.test(text)) return { status: 'scanned' };
+  return { status: 'waiting' };
 }
 
 /** 面板「逛逛」页要展示的数据 */

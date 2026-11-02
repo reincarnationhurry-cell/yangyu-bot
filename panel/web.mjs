@@ -15,6 +15,10 @@
  *  2. 在 DSH 的沙箱里 Chrome 起不来（sandbox initialization failed → GPU 进程崩溃 → FATAL Goodbye）。
  *     默认先按正常参数起，起不来自动退到 --no-sandbox --disable-gpu 再试一次。
  *  3. 贴吧桌面版（/f?kw=）永远撞「百度安全验证」，移动版 /mo/q/m 反而干净可用。
+ *  4. 默认无头（--headless=new）跑在后台：有窗口时每开一个标签页 macOS 都会把它提到最前面，
+ *     号主正在用电脑就被打断。无头版的 UA 里写着 HeadlessChrome，会被站点认出来，
+ *     所以每个页面都把 UA 和 userAgentData 改回普通 Chrome 的样子。
+ *     要看她在干嘛（或者扫码后要在网页上再验证一步），面板「逛逛」里打开「显示浏览器窗口」。
  *
  * 需要：Google Chrome（WEB_BROWSER 可指定路径）、Node ≥ 18（cdp.mjs 不依赖内置 WebSocket）。
  */
@@ -23,6 +27,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connectWs } from './cdp.mjs';
+import { readConfig } from './store.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DATA = process.env.YANGYU_DATA || join(here, 'data');
@@ -48,7 +53,16 @@ const ARGS_BASE = [
   '--disable-backgrounding-occluded-windows',
   '--disable-renderer-backgrounding',
   '--lang=zh-CN',
+  '--mute-audio', // 抖音视频会自动播放，别从号主的音箱里出声
 ];
+const ARGS_HEADLESS = ['--headless=new', '--hide-scrollbars'];
+
+/** 要不要显示窗口：默认不显示。面板里的 web.showWindow，或者环境变量 WEB_SHOW=1/0 */
+export function wantWindow() {
+  if (process.env.WEB_SHOW === '1') return true;
+  if (process.env.WEB_SHOW === '0') return false;
+  try { return !!readConfig().web?.showWindow; } catch { return false; }
+}
 const ARGS_SANDBOXLESS = ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'];
 
 function findBrowser() {
@@ -110,14 +124,22 @@ export async function browser() {
   if (conn && !conn.closed) return conn;
   if (connecting) return connecting;
   connecting = (async () => {
-    // 已经开着的窗口直接复用
+    // 已经开着的浏览器直接复用 —— 但有没有窗口得跟现在的设置对得上，
+    // 不然号主刚关掉「显示窗口」，那个老窗口还会一直弹
     const port = devToolsPort();
     if (port) {
       const ws = await liveWs(port);
       if (ws) {
         const c = await attach(ws);
-        if (await alive(c)) { conn = c; return conn; }
-        c.close();
+        if (await alive(c)) {
+          await prepare(c);
+          if (c.headless === !wantWindow()) { conn = c; return conn; }
+          await c.send('Browser.close').catch(() => {});
+          c.close();
+          await waitGone(port);
+        } else {
+          c.close();
+        }
       }
     }
     const modes = launchMode ? [launchMode, launchMode === 'plain' ? 'sandboxless' : 'plain'] : ['plain', 'sandboxless'];
@@ -126,6 +148,7 @@ export async function browser() {
       try {
         const c = await launch(mode);
         if (launchMode !== mode) { launchMode = mode; saveModePref(mode); }
+        await prepare(c);
         conn = c;
         return conn;
       } catch (err) {
@@ -142,6 +165,45 @@ async function attach(wsUrl) {
   const c = await connectWs(wsUrl);
   c.on('close', () => { if (conn === c) conn = null; });
   return c;
+}
+
+/**
+ * 记下这个浏览器是不是无头的；无头的话准备一份「普通 Chrome」的 UA，开页面时套上。
+ * 只改 UA 字符串不够：navigator.userAgentData.brands 里也会写 HeadlessChrome。
+ */
+async function prepare(c) {
+  const v = await c.send('Browser.getVersion').catch(() => null);
+  const ua = v?.userAgent || '';
+  c.headless = /HeadlessChrome/.test(ua) || /^HeadlessChrome/.test(v?.product || '');
+  c.uaOverride = null;
+  if (!c.headless) return;
+  const full = (/Chrome\/([\d.]+)/.exec(ua) || [])[1] || '';
+  const major = full.split('.')[0] || '';
+  c.uaOverride = {
+    userAgent: ua.replace('HeadlessChrome', 'Chrome'),
+    acceptLanguage: 'zh-CN,zh;q=0.9',
+    userAgentMetadata: {
+      brands: [
+        { brand: 'Google Chrome', version: major },
+        { brand: 'Chromium', version: major },
+        { brand: 'Not=A?Brand', version: '99' },
+      ],
+      fullVersion: full,
+      platform: process.platform === 'darwin' ? 'macOS' : process.platform === 'win32' ? 'Windows' : 'Linux',
+      platformVersion: '',
+      architecture: process.arch === 'arm64' ? 'arm' : 'x86',
+      model: '',
+      mobile: false,
+    },
+  };
+}
+
+/** 等老的浏览器真退出（调试端口不响应了），不然新实例会撞同一个配置目录的锁 */
+async function waitGone(port) {
+  for (let i = 0; i < 40; i++) {
+    if (!(await liveWs(port))) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
 }
 
 /** 真的发一条命令试试 —— 端口响应不代表浏览器还活着（沙箱里它会在几秒后 FATAL 退出） */
@@ -161,6 +223,7 @@ async function launch(mode) {
     '--remote-debugging-port=0', // 随机端口，只监听本机
     ...ARGS_BASE,
     ...(mode === 'sandboxless' ? ARGS_SANDBOXLESS : []),
+    ...(wantWindow() ? [] : ARGS_HEADLESS),
     '--window-size=1280,900',
     'about:blank',
   ];
@@ -216,9 +279,11 @@ export async function withPage(url, fn, opts = {}) {
 
 export async function openPage(url, { timeoutMs = 20000 } = {}) {
   const c = await browser();
-  const { targetId } = await c.send('Target.createTarget', { url: 'about:blank' });
+  // background：有窗口时也别把新标签页切到前台
+  const { targetId } = await c.send('Target.createTarget', { url: 'about:blank', background: true });
   const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
   const page = new Page(c, targetId, sessionId);
+  if (c.uaOverride) await page.send('Emulation.setUserAgentOverride', c.uaOverride).catch(() => {});
   await page.enable();
   if (url) await page.goto(url, { timeoutMs });
   return page;
@@ -341,6 +406,7 @@ export async function status() {
     port: port || null,
     profile: PROFILE,
     launchMode,
+    headless: conn && !conn.closed ? !!conn.headless : !wantWindow(),
     login: existsSync(join(PROFILE, 'Default', 'Cookies')),
   };
 }

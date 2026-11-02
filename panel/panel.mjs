@@ -577,6 +577,7 @@ const routes = {
   // 登录态 + 扫码
   'GET /api/web/login': async () => webvisit.loginState(),
   'POST /api/web/login/qr': async (_q, b) => webvisit.loginQr(String(b.site || '')),
+  'GET /api/web/login/poll': async (q) => webvisit.loginPoll(String(q.get('site') || '')),
   // 关掉浏览器（她逛完、或者卡住了要重开）
   'POST /api/web/browser/close': async () => { await web.shutdown(); return { ok: true }; },
 };

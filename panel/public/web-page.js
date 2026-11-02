@@ -24,6 +24,8 @@ function webFieldGetters(cfg) {
   return { num, sel, tog };
 }
 
+let webQrTimer = null; // 扫码登录的轮询
+
 async function pageWeb(main) {
   const tab = (S.webTab ||= 'tieba');
   S.webForum = S.webForum || '猫';
@@ -66,7 +68,7 @@ async function pageWeb(main) {
               <button class="btn sm" data-qr="${s}">扫码登录</button></div>`;
           }).join('')}
         </div>
-        <div class="hint">第一次用要扫一次码：点「扫码登录」，会弹出一个 Chrome 窗口（她专用的那个，和你平时的浏览器互不影响），用手机扫窗口里的码就行。
+        <div class="hint">第一次用要扫一次码：点「扫码登录」，二维码会直接显示在这里，用手机扫就行。她的浏览器在后台跑，不会弹窗口，登录态和你平时的浏览器互不影响。
         贴吧能看的和能回的不是一个量级 —— 不登录只能看帖子。</div>
         <div class="row" style="margin-top:10px"><button class="btn sm ghost" id="webKill">把浏览器关掉</button><span class="small muted" id="webKillMsg">${b.running ? `开着呢（端口 ${b.port}）` : '没开'}</span></div>
       </div>
@@ -84,6 +86,7 @@ async function pageWeb(main) {
           ${num('web.visitsPerDay.douyin', '抖音一天去几次', { max: 12 })}
           ${num('web.quietStart', '夜里不去（从几点）', { max: 23 })}
           ${num('web.quietEnd', '夜里不去（到几点）', { max: 23 })}
+          ${tog('web.showWindow', '显示浏览器窗口', '默认关着：她在后台逛，不会弹窗口打扰你。想看她在干嘛、或者扫码后要在网页上再验证一步时再打开')}
         </div>
       </div>
       <div class="cfg-sec">
@@ -171,10 +174,35 @@ async function pageWeb(main) {
     toast(site === 'tieba' ? '正在开贴吧登录页…' : '正在开抖音登录页…');
     const r = await api('/api/web/login/qr', { site });
     openDrawer(site === 'tieba' ? '扫码登录贴吧' : '扫码登录抖音', `<div class="qr-box">
-      <img src="data:image/png;base64,${r.png}" alt="登录二维码" style="width:260px;max-width:100%;border-radius:12px;background:#fff;padding:8px">
-      <div class="hint">用手机${site === 'tieba' ? '贴吧 App' : '抖音 App'}扫这个码。窗口里那个 Chrome 是她专用的，别在里面登你自己的号。</div>
+      <img class="webqr" src="data:image/png;base64,${r.png}" alt="登录二维码" style="width:260px;max-width:100%;border-radius:12px;background:#fff;padding:8px">
+      <div id="webQrMsg" class="qr-msg">用手机${site === 'tieba' ? '贴吧 App' : '抖音 App'}扫这个码，然后在手机上点确认</div>
+      <div class="hint">要登录的是她的号，别扫成你自己的。</div>
       <button class="btn sm" id="qrAgain" style="margin-top:10px">换一张</button></div>`);
     $('#qrAgain').onclick = () => { S.webLogin = null; btn.click(); };
+    // 扫完码要一直问后台「登上了没」，不然手机上成功了这边也没反应
+    clearTimeout(webQrTimer);
+    const poll = async () => {
+      const msg = $('#webQrMsg');
+      if (!$('#drawer').classList.contains('show') || !msg) return; // 抽屉关了就别再查
+      let p;
+      try { p = await api('/api/web/login/poll?site=' + site); } catch (err) { p = { status: 'waiting' }; }
+      if (p.status === 'ok') {
+        msg.innerHTML = '✅ 登录成功！';
+        toast(site === 'tieba' ? '贴吧登上了' : '抖音登上了');
+        S.webLogin = null;
+        setTimeout(() => { closeDrawer(); route(); }, 900);
+        return;
+      }
+      if (p.status === 'expired' || Date.now() > r.expiresAt) {
+        msg.innerHTML = '二维码过期了，点「换一张」再扫';
+        $('.webqr').style.opacity = 0.25;
+        return;
+      }
+      if (p.status === 'scanned') msg.innerHTML = '📱 扫到了，在手机上点「确认登录」';
+      if (p.status === 'verify') msg.innerHTML = '🔐 还要在网页上再验证一步（比如填短信验证码）：先在上面设置里打开「显示浏览器窗口」并保存，再点「换一张」重扫，到弹出的窗口里按提示完成';
+      webQrTimer = setTimeout(poll, 2000);
+    };
+    webQrTimer = setTimeout(poll, 2000);
   })));
   const kill = $('#webKill');
   if (kill) kill.onclick = (e) => busy(e.target, async () => { await api('/api/web/browser/close', {}); $('#webKillMsg').textContent = '已关掉'; toast('浏览器关了'); });

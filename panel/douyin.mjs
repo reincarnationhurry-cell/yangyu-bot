@@ -21,7 +21,7 @@
  * 实测 3/3 与详情页 [data-e2e="video-player-digg"] 完全一致（3754 / 3559 / 2.8万）。
  * 所以 hotVideos 返回的 playCount 恒为 null，真实数字在 likeCount 里。
  */
-import { openPage } from './web.mjs';
+import { openPage, browser } from './web.mjs';
 
 const HOT_URL = 'https://www.douyin.com/hot';
 const videoUrl = (vid) => `https://www.douyin.com/video/${vid}`;
@@ -799,8 +799,9 @@ export async function likeVideo(vid, on = true, { throttle: t = throttle } = {})
  * （class 是 douyin_login_new_class，但这个 class 是 hash 化的，不能依赖）。
  * 截图整页交回去，让用户直接扫 —— 比找二维码 canvas 再抠图稳得多。
  */
-export async function loginQr() {
+export async function loginQr({ keep = false } = {}) {
   const page = await openPageImpl(HOT_URL);
+  let ok = false;
   try {
     // 这里有个必须踩对的时间差（实测）：
     // 「登录」按钮在 React 水合之前就已经躺在 DOM 里了，这时候点**毫无反应**；
@@ -872,10 +873,29 @@ export async function loginQr() {
       : null;
     const png = shot?.data || (await page.screenshot().catch(() => null));
     if (!png) throw new DouyinError('登录框出来了但截图失败', { code: 'no-shot' });
-    return { png, expiresAt: Date.now() + 120_000 };
+    const out = { png, expiresAt: Date.now() + 120_000 };
+    ok = true;
+    return keep ? { ...out, page } : out;
   } finally {
-    await Promise.resolve(page.close?.()).catch(() => {});
+    // keep=true 时登录框所在的标签页要留着：扫码确认后是它在轮询、种 cookie
+    if (!keep || !ok) await Promise.resolve(page.close?.()).catch(() => {});
   }
+}
+
+/**
+ * 纯函数：一堆 cookie 里有没有抖音的登录会话。
+ * 登录成功后 .douyin.com 上会种 sessionid / sessionid_ss / sid_tt；游客没有这几个。
+ */
+export function hasSession(cookies) {
+  return (cookies || []).some((x) => /^(sessionid|sessionid_ss|sid_tt)$/.test(x?.name || '')
+    && /(^|\.)douyin\.com$/.test(x?.domain || '') && !!x?.value);
+}
+
+/** 扫码时轮询用：只看 cookie，不像 loginState 那样每次都开一遍 /hot */
+export async function hasSessionCookie() {
+  const c = await browser();
+  const { cookies } = await c.send('Storage.getCookies');
+  return hasSession(cookies);
 }
 
 /** 给外面用的常量，免得面板里硬编码域名 */

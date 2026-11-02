@@ -425,8 +425,15 @@ export async function loginState() {
         // 头像：优先 data-e2e，其次 class 含 avatar 的 img
         const avatar = document.querySelector('[data-e2e="live-avatar"] img, [class*="avatar"] img');
         const selfLink = document.querySelector('a[href*="/user/self"]');
-        const nickname = (avatar?.getAttribute('alt') || '').trim() ||
-                         (selfLink?.innerText || '').trim().split('\\n')[0];
+        // 昵称在 localStorage 的 user_info 里（实测：头像 alt 是空的，/user/self 链接的字是导航栏的「我的」，
+        // 以前就把「我的」当成了昵称）。都拿不到就留空，宁可不显示也别显示错的。
+        let nickname = '';
+        for (const k of ['user_info', 'user_info_passport_new', 'user_info_passport']) {
+          const m = /"nickname"\\s*:\\s*"([^"]{1,40})"/.exec(localStorage.getItem(k) || '');
+          if (m) { nickname = m[1]; break; }
+        }
+        if (!nickname) nickname = (avatar?.getAttribute('alt') || '').trim();
+        if (/^(我的|我|头像|登录|个人主页)$/.test(nickname)) nickname = '';
         return { hasLoginBtn, hasAvatar: !!avatar || !!selfLink, nickname, hasBody: txt.length > 50 };
       })()`).catch(() => null);
       if (r && (r.hasLoginBtn || r.hasAvatar)) break;

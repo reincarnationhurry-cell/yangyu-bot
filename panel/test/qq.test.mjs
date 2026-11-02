@@ -22,6 +22,15 @@ class FakeWS {
   push(ev) { this.onmessage?.({ data: JSON.stringify(ev) }); }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** 等到条件成立（最多 ms）：别用写死的 sleep 去赌「这时候应该回完了」，机器一忙就挂 */
+async function until(fn, ms = 8000, step = 50) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (fn()) return true;
+    await sleep(step);
+  }
+  return !!fn();
+}
 const privateMsg = (user_id, message) => ({ post_type: 'message', message_type: 'private', user_id, self_id: 42, message });
 
 // ─── 假的模型接口：按顺序吐预先排好的回复，记下收到的请求 ────────────
@@ -150,7 +159,9 @@ test('reachOutDue：白天、他很久没说话、今天还没找够才找', () 
 });
 
 test('整条链路：号主连发两条 → 合成一次回 → 发回去；陌生人不理', async () => {
-  store.writeConfig({ qq: { mode: 'onebot', ownerQQ: '10086', reachOut: false } });
+  // voiceChance 必须钉成 0：默认 0.15 的概率会把这句改成语音发，测试环境里 TTS 跑不了，
+  // 退回打字要多花好几秒 —— 以前写死等 3.2 秒，大约每 6 次挂 1~2 次就是这个原因
+  store.writeConfig({ qq: { mode: 'onebot', ownerQQ: '10086', reachOut: false, voiceChance: 0 } });
   globalThis.WebSocket = FakeWS;
   const qq = await import('../qq/index.mjs');
   qq.start();
@@ -162,7 +173,10 @@ test('整条链路：号主连发两条 → 合成一次回 → 发回去；陌�
   ws.push(privateMsg(99999, [{ type: 'text', data: { text: '加个好友' } }]));
   ws.push(privateMsg(10086, [{ type: 'text', data: { text: '肥鱼' } }]));
   ws.push(privateMsg(10086, [{ type: 'text', data: { text: '在吗' } }]));
-  await sleep(3200);
+  // 等她回出来（合并窗口 2.5 秒 + 想一下），而不是写死睡 3.2 秒
+  const replied = () => ws.sent.some((x) => x.action === 'send_private_msg' && x.params.user_id === 10086);
+  assert.ok(await until(replied), '8 秒内应该回了号主');
+  await sleep(300); // 再等一拍：确认没有第二次调用模型
   assert.equal(llmCalls.length, n0 + 1, '两条合成一次');
   assert.match(llmCalls.at(-1).messages.at(-1).content, /肥鱼\n在吗/);
   const sends = ws.sent.filter((x) => x.action === 'send_private_msg');

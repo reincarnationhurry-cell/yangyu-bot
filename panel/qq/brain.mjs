@@ -40,6 +40,7 @@ export function persona(md = readFileSync(join(ROOT, 'AGENTS.md'), 'utf-8')) {
 
 const HOW = `## 在 QQ 里怎么做事（你现在用的是自己的 QQ 号，直接跟号主私聊）
 - 回复就是你直接发给他的话：口语、1~3 句、一条就好，不要 markdown、不要分点、不要报告「已记录」「已更新日志」。
+- 聊天记录里你那几条前面的 [发了表情包] [发了语音] 这类方括号是系统标的，你回复里别写这种标记，想发就调工具。
 - 想发表情包就调 send_sticker（大约 4~6 条消息配 1 张，情绪明显时才发；正经回答、他求助时不发）。
 - 晚安早安、撒娇、他说「说句话听听」、特别重要的关心，可以调 send_voice 发语音（30 秒内，像说话，别每条都发）。
 - 他说了值得长期记住的事（称呼、身份、偏好、计划、deadline、口头禅、他定的规矩、「记住这个」），调 remember 记下来，别跟他说你在记；
@@ -221,9 +222,17 @@ function history(list) {
   return out;
 }
 
-/** 发出去之前收拾一下：去掉 markdown、去掉记忆插件那种「已更新日志」的尾巴 */
+// 聊天记录里给她自己那几条加的标记（见 history）。模型偶尔会照着学、写进回复里，发之前抹掉：
+// 表情包连带后面的文件名；语音那句已经是语音了，连同同一行后面的字一起去掉，免得文字再念一遍
+const ECHO_STICKER = /\[发了表情包\]\s*(?:[a-z]+_[\u4e00-\u9fa5]+(?:\.png)?)?/gi;
+const ECHO_VOICE = /\[发了语音\][^\n]*/g;
+const ECHO_TAG = /\[(?:你主动找他|后台汇报|提醒)\]\s*|^（隔了 \d+ 小时）/gm;
+
+/** 发出去之前收拾一下：去掉 markdown、去掉记忆插件那种「已更新日志」的尾巴、去掉学着聊天记录写的标记 */
 export function tidyReply(text) {
   return String(text || '')
+    .replace(ECHO_STICKER, '').replace(ECHO_VOICE, '').replace(ECHO_TAG, '')
+    .replace(/[ \t]+$/gm, '')
     .replace(/\*\*|__|`/g, '')
     .split('\n').filter((l) => !/(今日日志|昨日反思|已记录|已更新(记忆|日志)|记进(了)?(今日)?日志|memory_)/.test(l)).join('\n')
     .replace(/^#+\s*/gm, '').replace(/\n{3,}/g, '\n\n').trim();

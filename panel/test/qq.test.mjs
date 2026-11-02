@@ -104,6 +104,14 @@ test('persona：拿到性格和说话方式，不带 DSH 里跑命令的那些',
   assert.doesNotMatch(p, /干活的节奏/);
 });
 
+test('tidyReply：学着聊天记录写的 [发了表情包] / [发了语音] 标记要抹掉', () => {
+  assert.equal(
+    brain.tidyReply('哎呀！我搞错房间了！[发了表情包] surprised_惊讶\n\n这次绝对没错，等我看完给你汇报！[发了语音] 哎呀走错了！我这就去蹲着'),
+    '哎呀！我搞错房间了！\n\n这次绝对没错，等我看完给你汇报！');
+  assert.equal(brain.tidyReply('[你主动找他] 在干嘛呀'), '在干嘛呀');
+  assert.equal(brain.tidyReply('（隔了 5 小时）早呀'), '早呀');
+});
+
 test('tidyReply：去掉 markdown 和「已更新日志」的尾巴', () => {
   assert.equal(brain.tidyReply('**好呀**，早点睡\n\n**已更新今日日志**\n新增：xx'), '好呀，早点睡\n\n新增：xx');
 });

@@ -37,15 +37,45 @@ export const RULES = `B站社区规则（必须遵守）：
 - 只评论视频本身，不提到你自己的生活私事或任何人的隐私。`;
 
 export function llmReady() {
-  return !!readSecrets().llmApiKey;
+  return !!readSecrets().llmApiKey && !!resolveProvider().baseUrl;
+}
+
+/**
+ * 解析当前生效的模型配置。
+ * - llm.active 为空 → 用顶层 llm.baseUrl + llm.model（兼容旧配置）
+ * - llm.active 是线路名（如 'gemini'）→ 用 llm.providers[name]，缺的字段继承顶层
+ *
+ * 走同一个网关时，一条线路往往只需要写 model（比如 'gemini/gemini-3.8-flash'），
+ * 地址和密钥都跟着顶层走 —— 不用为每个模型再配一份。
+ */
+function resolveProvider() {
+  const cfg = readConfig().llm;
+  const name = cfg.active || null;
+  const p = name ? cfg.providers?.[name] : null;
+  if (p) {
+    return {
+      name,
+      baseUrl: p.baseUrl || cfg.baseUrl,
+      model: p.model || cfg.model,
+      // 这条线路额外的请求体参数（如推理模型的 reasoning_effort）
+      body: p.body && typeof p.body === 'object' ? p.body : {},
+      // 推理型模型（思考过程先花掉一大截 token）的最小预算，0 = 不兜底
+      minTokens: Number(p.minTokens) || 0,
+    };
+  }
+  return { name: null, baseUrl: cfg.baseUrl, model: cfg.model, body: {}, minTokens: 0 };
 }
 
 function endpoint(path) {
-  const base = String(readConfig().llm.baseUrl || '').replace(/\/+$/, '');
+  const p = resolveProvider();
+  const base = String(p.baseUrl || '').replace(/\/+$/, '');
+  // Gemini 的 OpenAI 兼容端点是 …/v1beta/openai，后面不带 /v1
+  if (/\/v1beta\/openai$/.test(base)) return `${base}${path}`;
   return /\/v\d+$/.test(base) ? `${base}${path}` : `${base}/v1${path}`;
 }
 
 function authHeaders() {
+  // 不管走哪条线路都是同一个网关密钥（要直连别的服务，把地址填成它自己的就行）
   const key = readSecrets().llmApiKey;
   if (!key) throw new Error('没配置模型 API Key（面板 → 自动养号 → 模型设置）');
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` };
@@ -122,7 +152,6 @@ export async function chat(messages, opts = {}) {
  * QQ 小号那边的她（qq/brain.mjs）靠这个自己调工具。
  */
 export async function chatRaw(messages, { maxTokens = 300, temperature = 0.9, tag = 'other', essential = false, tools, model } = {}) {
-  const cfg = readConfig().llm;
   if (!essential && !budgetLeft().ok) {
     const u = readUsage();
     if (!u.hitAt) {
@@ -131,7 +160,11 @@ export async function chatRaw(messages, { maxTokens = 300, temperature = 0.9, ta
     }
     throw new BudgetError('今天的模型预算用完了');
   }
-  const body = { model: String(model || cfg.model || '').trim(), messages, max_tokens: maxTokens, temperature };
+  const p = resolveProvider();
+  // 推理型模型（Gemini 3.8 Flash 这类）会先花掉一大截 token 思考：实测只给 200 时
+  // 思考就把额度吃光，正文是空的。线路配了 minTokens 就兜住这个下限。
+  const budget = Math.max(maxTokens, p.minTokens || 0);
+  const body = { ...p.body, model: String(model || p.model || '').trim(), messages, max_tokens: budget, temperature };
   if (tools?.length) body.tools = tools;
   let res;
   try {

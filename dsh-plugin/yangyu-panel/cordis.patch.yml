@@ -1,0 +1,14 @@
+- insert:
+    - id: dsh-yangyu-panel
+      name: dsh-yangyu-panel
+      config:
+        # 「只要 dsh 在运行，面板也在运行」：插件加载即拉起，掉线由看门狗自愈。
+        autoStart: true
+        panelPort: 8899
+        watchdogSecs: 30
+        # 面板比 DSH 活得久（与现有 launchd 一致）。想让面板严格随 DSH 退出：
+        # 把它改成 true，并 launchctl bootout gui/$UID/com.mikejam.yangyu-panel。
+        stopOnHostExit: false
+        # 现有 launchd 任务 loaded 时让位给它，避免两个监督者抢端口。
+        respectLaunchd: true
+        launchdLabel: com.mikejam.yangyu-panel

@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "title": "养鱼面板",
+    "description": "在 DSH 左栏接入「养鱼面板」：点开后用一整页嵌入本地 127.0.0.1:8899 面板，宿主半侧随 DSH 自动拉起 panel.mjs、每 30 秒探活自愈，并提供状态/启动/停止路由。"
+  },
+  "panel": "养鱼面板",
+  "toolbar.start": "启动",
+  "toolbar.restart": "重启",
+  "toolbar.stop": "停止",
+  "toolbar.refresh": "刷新",
+  "toolbar.openInBrowser": "在内置浏览器打开",
+  "toolbar.hide": "收起",
+  "handle.hint": "把鼠标移到顶部可显示状态栏",
+  "status.checking": "检查状态…",
+  "status.idle": "未启动",
+  "status.starting": "启动中…",
+  "status.stopping": "停止中…",
+  "status.ready": "已就绪",
+  "status.failed": "失败",
+  "status.notReady": "启动已结束，但面板未就绪",
+  "status.timeout": "启动超时（30 秒）",
+  "status.unknown": "未知原因",
+  "service.panel": "面板",
+  "service.ready": "已就绪",
+  "service.pending": "未就绪",
+  "service.failed": "失败",
+  "service.reused": "复用现有进程",
+  "service.managed": "由插件启动",
+  "hint.needStart": "面板尚未启动。点「启动」后由 DSH 拉起 panel.mjs，就绪即在此页嵌入。",
+  "hint.opening": "正在等待面板就绪，进度实时显示在工具条上。"
+}

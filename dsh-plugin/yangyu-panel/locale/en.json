@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "title": "Fish Panel",
+    "description": "Adds the local fish-panel (127.0.0.1:8899) to the DSH sidebar: one click embeds the whole page, while the host half launches panel.mjs with DSH, health-checks it every 30s, and exposes status/start/stop routes."
+  },
+  "panel": "Fish Panel",
+  "toolbar.start": "Start",
+  "toolbar.restart": "Restart",
+  "toolbar.stop": "Stop",
+  "toolbar.refresh": "Reload",
+  "toolbar.openInBrowser": "Open in built-in browser",
+  "toolbar.hide": "Hide",
+  "handle.hint": "Move the pointer to the top edge to show the status bar",
+  "status.checking": "Checking…",
+  "status.idle": "Not started",
+  "status.starting": "Starting…",
+  "status.stopping": "Stopping…",
+  "status.ready": "Ready",
+  "status.failed": "Failed",
+  "status.notReady": "Start finished, but the panel is not ready",
+  "status.timeout": "Start timed out (30s)",
+  "status.unknown": "unknown reason",
+  "service.panel": "Panel",
+  "service.ready": "ready",
+  "service.pending": "pending",
+  "service.failed": "failed",
+  "service.reused": "reused existing process",
+  "service.managed": "started by plugin",
+  "hint.needStart": "The panel is not running yet. Press Start: the host launches panel.mjs, then embeds it here.",
+  "hint.opening": "Waiting for the panel to become ready; progress shows in the toolbar."
+}

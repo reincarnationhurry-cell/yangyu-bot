@@ -1,0 +1,47 @@
+{
+  "name": "dsh-yangyu-panel",
+  "private": true,
+  "version": "0.1.0",
+  "description": "在 DSH 左栏接入「养鱼面板」：点开即一整页嵌入本地 127.0.0.1:8899 面板；宿主半侧随 DSH 自动拉起 panel.mjs、周期探活自愈，并与 launchd 共存不抢端口。",
+  "type": "module",
+  "icon": "./icon.svg",
+  "main": "./index.js",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "yangyu",
+    "panel"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/zh.json",
+    "locale/en.json",
+    "README.md",
+    "scripts/selftest.mjs"
+  ],
+  "scripts": {
+    "selftest": "node scripts/selftest.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}

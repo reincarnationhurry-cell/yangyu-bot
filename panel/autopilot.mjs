@@ -21,6 +21,7 @@ import * as mind from './mind.mjs';
 import * as social from './social.mjs';
 import * as lingo from './lingo.mjs';
 import * as webvisit from './webvisit.mjs';
+import * as bililive from './bililive.mjs';
 import {
   ROOT, SHICHEN, localDate, logAction, todayCounts, addTask, addReview as addReviewRaw, readReview, updateReview,
   readConfig, readState, writeState, readActions, readJsonl, appendJsonl, FILES, nowIso, readTasks,
@@ -199,7 +200,7 @@ async function tick() {
     return;
   }
   if (!live.running) maybeNightlyDiary(cfg, now).catch((e) => console.error('[autopilot] 日记', e.message));
-  if (!cfg.enabled || live.running || social.isBusy()) return;
+  if (!cfg.enabled || live.running || social.isBusy() || bililive.isBusy()) return;
 
   if (gap > 5 * 60_000) {
     logAction({ kind: 'wake', source: SRC, detail: `电脑醒了（睡了约 ${Math.round(gap / 60_000)} 分钟）` });
@@ -240,6 +241,15 @@ async function tick() {
       await runSession({ reason: '特别关注更新了', vipOnly: true });
       return;
     }
+  }
+
+  // 白天偶尔自己去看一会儿直播（开着「自己看直播」才会）；看直播时这轮别的先不做
+  if (bililive.due(now, cfg.live)) {
+    bililive.watch({ reason: '自己想看' }).catch((e) => {
+      if (e.risk) enterCooldown(cfg, e);
+      else logAction({ kind: 'error', source: SRC, ok: false, error: e.message, detail: '想看会儿直播，没看成' });
+    });
+    return;
   }
 
   // 昨天的子时会跨到今天凌晨，所以两天都看
@@ -998,7 +1008,7 @@ export async function runTask(task) {
     const webSite = webvisit.TASK_SITE[task.type];
     const webRun = { web_tieba: 'tieba', web_douyin: 'douyin' }[task.type]; // 号主让她去逛一轮
     // 贴吧 / 抖音的活跟 B站 那轮不抢，不用等
-    if (live.running && !webSite && !webRun) {
+    if (live.running && !webSite && !webRun && task.type !== 'live') {
       updateTask(task.id, { resultNote: '她正在刷，这轮完了就去' });
       while (live.running) await bili.sleep(10_000);
     }
@@ -1011,6 +1021,9 @@ export async function runTask(task) {
       const r = await webvisit.run({ site: webRun, reason: '号主让去的' });
       ok = !!r.ok;
       note = r.summary || r.error || r.skipped || '';
+    } else if (task.type === 'live') {
+      const r = await bililive.watch({ request: task.note, room: task.payload?.room, keyword: task.payload?.keyword, reason: '号主让看的' });
+      note = r.summary;
     } else if (task.type === 'diary') note = await diaryNow();
     else if (task.type === 'check') note = await inboxNow();
     else {
@@ -1025,6 +1038,7 @@ export async function runTask(task) {
     logAction({ kind: ok ? 'task_done' : 'error', source: SRC, ok, target: task.type, detail: `派的活：${task.note || task.type} → ${note}` });
     report(ok, note);
   } catch (e) {
+    if (e.risk) enterCooldown(readConfig(), e);
     updateTask(task.id, { status: 'failed', doneAt: nowIso(), resultNote: e.message, plan });
     logAction({ kind: 'error', source: SRC, ok: false, error: e.message, detail: `派的活没做成：${task.note || task.type}` });
     report(false, e.message);

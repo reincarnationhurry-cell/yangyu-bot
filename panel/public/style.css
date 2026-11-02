@@ -352,3 +352,43 @@ label.f { display: block; font-size: 12px; color: var(--text2); margin-bottom: 5
 .qr { width: 240px; max-width: 100%; margin: 8px auto 14px; padding: 10px; background: #fff; border-radius: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.08); transition: opacity .2s; }
 .qr svg { display: block; width: 100%; height: auto; }
 .qr-msg { font-size: 14px; margin-bottom: 6px; }
+
+/* ─── 直播标签 ─────────────────────────────────────────── */
+.live-now { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.live-cover { position: relative; width: min(320px, 100%); aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: var(--card2); flex-shrink: 0; }
+.live-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.live-dot { position: absolute; left: 8px; top: 8px; background: var(--pink); color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 99px; }
+.live-info { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 4px; }
+.live-dm { margin: 8px 0; max-height: 180px; overflow: auto; font-size: 13px; background: var(--card2); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; }
+.live-info .btn { align-self: flex-start; }
+.live-cfg { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin: 16px 0 4px; padding-top: 14px; border-top: 1px solid var(--line); }
+.live-h { font-size: 14px; margin: 18px 0 10px; }
+.live-recent { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+
+/* ─── 聊天框 ───────────────────────────────────────────── */
+.chat-fab { position: fixed; right: 22px; bottom: 22px; z-index: 35; width: 52px; height: 52px; border-radius: 50%; border: none; background: var(--blue); color: #fff; font-size: 24px; cursor: pointer; box-shadow: var(--shadow); }
+.chat-fab:hover { filter: brightness(1.08); }
+.chat-fab i { position: absolute; top: 4px; right: 4px; width: 11px; height: 11px; border-radius: 50%; background: var(--pink); border: 2px solid var(--card); display: none; }
+.chat-fab i.show { display: block; }
+.chat-box { position: fixed; right: 22px; bottom: 86px; z-index: 36; width: min(380px, calc(100vw - 32px)); height: min(560px, calc(100vh - 120px)); background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); display: none; flex-direction: column; overflow: hidden; }
+.chat-box.show { display: flex; }
+.chat-box header { display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--line); }
+.chat-list { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--bg); }
+.chat-msg { display: flex; flex-direction: column; max-width: 82%; }
+.chat-msg.me { align-self: flex-end; align-items: flex-end; }
+.chat-msg.her { align-self: flex-start; }
+.chat-b { padding: 8px 12px; border-radius: 14px; font-size: 14px; line-height: 1.5; word-break: break-word; }
+.chat-msg.me .chat-b { background: var(--blue); color: #fff; border-bottom-right-radius: 4px; }
+.chat-msg.her .chat-b { background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.chat-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.chat-sticker { width: 110px; height: auto; display: block; }
+.chat-b audio { width: 220px; max-width: 100%; height: 34px; display: block; }
+.chat-said { font-size: 12px; color: var(--text2); margin-top: 4px; }
+.chat-typing { display: none; font-size: 12px; color: var(--muted); padding: 4px 16px; background: var(--bg); }
+.chat-typing.show { display: block; }
+.chat-box footer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); align-items: flex-end; }
+.chat-box textarea { flex: 1; resize: none; min-height: 36px; max-height: 120px; font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line2); background: var(--card); color: var(--text); }
+@media (max-width: 860px) {
+  .chat-fab { bottom: calc(80px + env(safe-area-inset-bottom)); right: 16px; }
+  .chat-box { right: 16px; left: 16px; width: auto; bottom: calc(142px + env(safe-area-inset-bottom)); height: min(520px, calc(100vh - 200px)); }
+}

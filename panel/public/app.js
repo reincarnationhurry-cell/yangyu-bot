@@ -119,6 +119,7 @@ const KIND = {
   // 贴吧 / 抖音：和 B站 的动作分开记，一眼能看出她在哪个平台干什么
   tb_forum: ['🏛️', '逛吧'], tb_thread: ['📖', '看帖子'], tb_reply: ['✍️', '贴吧回帖'], tb_follow: ['➕', '关注贴吧'],
   dy_video: ['🎵', '刷抖音'], dy_comment: ['💬', '抖音评论'], dy_like: ['❤️', '抖音点赞'],
+  live: ['📡', '看直播'],
 };
 const SOURCE = { auto: ['自动', 'blue'], panel: ['面板', 'violet'], bot: ['QQ里的她', 'pink'] };
 
@@ -1119,7 +1120,7 @@ async function pageExplore(main) {
   main.innerHTML = head('刷视频', '在这里看到的和她看到的一样；点开视频可以让她去看、点赞、评论') +
     `<div class="card">
       <div class="filters">
-        <div class="seg" id="exSeg">${[['feed', '首页推荐'], ['hot', '热门'], ['search', '搜索'], ['history', '观看历史']].map(([k, n]) => `<button data-v="${k}" class="${tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+        <div class="seg" id="exSeg">${[['feed', '首页推荐'], ['hot', '热门'], ['search', '搜索'], ['history', '观看历史'], ['live', '直播']].map(([k, n]) => `<button data-v="${k}" class="${tab === k ? 'on' : ''}">${n}</button>`).join('')}</div>
         <span class="spacer"></span>
         <div class="row" id="exSearch" style="display:${tab === 'search' ? 'flex' : 'none'}"><input id="kw" placeholder="搜点什么" value="${esc(S.kw || '')}" style="width:220px"><button class="btn primary" id="kwGo">搜索</button></div>
         <button class="btn" id="exReload">换一批</button>
@@ -1136,6 +1137,7 @@ async function pageExplore(main) {
   const load = async () => {
     out.innerHTML = '<div class="empty">加载中…</div>';
     try {
+      if (S.exTab === 'live') { await renderLive(out); return; }
       if (S.exTab === 'search') {
         if (!S.kw) { out.innerHTML = '<div class="empty">输入关键词搜一搜</div>'; return; }
         const r = await api('/api/search?q=' + encodeURIComponent(S.kw));

@@ -7,6 +7,9 @@
  * 别人私聊她一律不理（只记一笔），群消息不看。
  *
  * notify.mjs 发提醒、汇报、分享时也走这里（sendOwner）：小号能主动发，不用等号主先开口。
+ *
+ * 面板里也有个聊天框（panelSay / chatView）：号主坐在电脑前就不用掏手机。跟 QQ 用的是同一个大脑、
+ * 同一份聊天记录（面板那几句带 via: 'panel'），所以两边接着聊不会断片；只是她回的话留在面板里，不发到 QQ。
  */
 import { OneBot, seg, readMessage, imageSegments, recordSegments } from './onebot.mjs';
 import { Telegram, readTgMessage, photoIds, voiceIds, whoIs } from './telegram.mjs';
@@ -17,13 +20,17 @@ import * as owner from './owner.mjs';
 import * as memory from '../memory.mjs';
 import * as llm from '../llm.mjs';
 import * as napcat from './napcat.mjs';
-import { readConfig, writeConfig, readSecrets, readState, writeState, logAction, localDate } from '../store.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { DATA, readConfig, writeConfig, readSecrets, readState, writeState, logAction, localDate } from '../store.mjs';
 
 let bot = null; // QQ 小号（OneBot）
 let tg = null; // Telegram bot；两个同时只开一个
-let queue = []; // 号主刚发来、还没回的 [{ text, ts }]
-let timer = null;
+// 号主刚发来、还没回的 [{ text, ts }]，按从哪条线来的分开排（回的时候也回到那条线上）
+const queues = { qq: [], panel: [] };
+const timers = {};
 let busy = false;
+let busyVia = null; // 正在想哪条线的回复：面板据此显示「正在输入」
 let ticker = null;
 const strangers = new Set();
 
@@ -179,40 +186,45 @@ async function onTgMessage(msg) {
 }
 
 /** 号主的一句话（已经看过图、听过语音）→ 排队等着一起回 */
-async function take(text) {
+async function take(text, via = 'qq') {
+  const ch = CH[via];
   if (/^\/(new|重来|清空)$/.test(text)) {
     owner.resetContext();
-    await sendText('好，那我们重新开始聊～');
+    await ch.text('好，那我们重新开始聊～');
     return;
   }
   const ts = Date.now();
-  owner.logChat({ from: 'owner', text });
-  queue.push({ text, ts });
-  // 他常常一句话分几条发：等 2.5 秒没新的再一起回
-  clearTimeout(timer);
-  timer = setTimeout(() => flush().catch((e) => console.error('[qq] flush', e)), 2500);
+  owner.logChat({ from: 'owner', text, via });
+  queues[via].push({ text, ts });
+  // 他常常一句话分几条发：等一会儿没新的再一起回（面板上打字快，等短一点）
+  clearTimeout(timers[via]);
+  timers[via] = setTimeout(() => flush(via).catch((e) => console.error('[qq] flush', e)), via === 'panel' ? 1500 : 2500);
 }
 
-async function flush() {
-  if (busy || !queue.length) return;
+async function flush(via) {
+  if (!queues[via].length) return;
+  if (busy) { setTimeout(() => flush(via).catch(() => {}), 500); return; } // 另一条线正在回：等它说完再想这边
+  const ch = CH[via];
   busy = true;
-  const batch = queue;
-  queue = [];
+  busyVia = via;
+  const batch = queues[via];
+  queues[via] = [];
   try {
-    typing();
-    if (!llm.llmReady()) { await sendText('（面板里还没配模型，她现在没法想事情）'); return; }
+    ch.typing();
+    if (!llm.llmReady()) { await ch.text('（面板里还没配模型，她现在没法想事情）'); return; }
     let out;
     try {
       out = await brain.reply(batch.map((b) => b.text).join('\n'), { before: batch[0].ts, model: readConfig().qq.model || undefined });
     } catch (e) {
       logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: '想回你的时候脑子卡了' });
-      await sendText('诶，我脑子卡了一下 qwq 你再说一遍？');
+      await ch.text('诶，我脑子卡了一下 qwq 你再说一遍？');
       return;
     }
-    await deliver(out);
+    await deliver(out, ch);
   } finally {
     busy = false;
-    if (queue.length) setTimeout(() => flush().catch(() => {}), 300);
+    busyVia = null;
+    for (const v of Object.keys(queues)) if (queues[v].length) setTimeout(() => flush(v).catch(() => {}), 300);
   }
 }
 
@@ -258,47 +270,46 @@ async function fetchImage({ url, file }) {
 }
 
 // ─── 发 ────────────────────────────────────────────────────
-async function deliver(out) {
+async function deliver(out, ch) {
   // 平时回的话，有一定概率直接念给他听（她自己没想发语音、话也念得出来的时候）
   const said = !out.voice && Math.random() < (readConfig().qq.voiceChance ?? 0) ? voice.speakable(out.text) : null;
   if (said) { out.voice = { text: said, voice: voice.DEFAULT_VOICE }; out.text = ''; }
-  if (out.text) await sendText(out.text);
-  if (out.research) doResearch(out.research);
-  if (out.makeSticker) doSticker(out.makeSticker);
+  if (out.text) await ch.text(out.text);
+  if (out.research) doResearch(out.research, ch);
+  if (out.makeSticker) doSticker(out.makeSticker, ch);
   if (out.sticker) {
-    try { await sendSticker(out.sticker); } catch (e) { console.error('[qq] 表情包', e.message); }
+    try { await ch.sticker(out.sticker); } catch (e) { console.error('[qq] 表情包', e.message); }
   }
   if (out.voice) {
     try {
-      await sendVoice(await brain.voiceB64(out.voice.text, out.voice.voice));
-      owner.logChat({ from: 'her', text: out.voice.text, kind: 'voice' });
+      await ch.voice(await brain.voiceB64(out.voice.text, out.voice.voice), out.voice.text);
     } catch (e) {
       console.error('[qq] 语音', e.message);
-      await sendText(out.voice.text); // 语音发不出去就打字说
+      await ch.text(out.voice.text); // 语音发不出去就打字说
     }
   }
 }
 
 // ─── 外挂：后台做，做完她自己说 ───────────────────────────────
-function doResearch(question) {
+function doResearch(question, ch) {
   logAction({ kind: 'qq', source: 'auto', detail: `🔎 交给 DSH 去查：${question.slice(0, 60)}` });
   dsh.research(question)
     .then(async (r) => {
       logAction({ kind: 'qq', source: 'auto', detail: `🔎 查到了（${Math.round(r.ms / 1000)} 秒，用了 ${[...new Set(r.tools)].join('、') || '没用工具'}）`, meta: { question } });
       const line = await brain.researchReply(question, r.text).catch(() => r.text.slice(0, 400));
-      await sendText(line || r.text.slice(0, 400), 'report');
+      await ch.text(line || r.text.slice(0, 400), 'report');
     })
     .catch(async (e) => {
       logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: `🔎 没查成：${question.slice(0, 40)}` });
-      await sendText('呜，我去查了一圈没查成 qwq 晚点再帮你看看？', 'report').catch(() => {});
+      await ch.text('呜，我去查了一圈没查成 qwq 晚点再帮你看看？', 'report').catch(() => {});
     });
 }
 
-function doSticker(x) {
+function doSticker(x, ch) {
   dsh.makeSticker(x)
     .then(async (name) => {
-      await sendSticker(name);
-      await sendText(`嘿嘿，给自己画了张新表情：${x.zh}`, 'report');
+      await ch.sticker(name);
+      await ch.text(`嘿嘿，给自己画了张新表情：${x.zh}`, 'report');
     })
     .catch((e) => logAction({ kind: 'qq', source: 'auto', ok: false, error: e.message, detail: `想给自己做张新表情（${x.zh || ''}），没做成` }));
 }
@@ -335,10 +346,46 @@ async function sendSticker(name) {
 }
 
 /** mp3 的 base64 → 语音（Telegram 要转成 ogg opus 才是语音条） */
-async function sendVoice(b64) {
+async function sendVoice(b64, text) {
   const id = to();
   if (tg) await tg.sendVoice(id, voice.toOgg(Buffer.from(b64, 'base64')));
   else await bot.sendPrivate(id, [seg.record(b64)]);
+  owner.logChat({ from: 'her', text, kind: 'voice' });
+}
+
+// ─── 面板聊天框 ─────────────────────────────────────────────
+// 她回的话只写进聊天记录（via: 'panel'），面板自己来拉；语音存成 mp3 放 data/chat-voice/
+export const VOICE_DIR = join(DATA, 'chat-voice');
+const panelSay = (extra) => owner.logChat({ from: 'her', via: 'panel', ...extra });
+const PANEL = {
+  async text(text, kind) { panelSay({ text, kind }); },
+  async sticker(name) { panelSay({ text: name, kind: 'sticker' }); },
+  async voice(b64, text) {
+    mkdirSync(VOICE_DIR, { recursive: true });
+    const file = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}.mp3`;
+    writeFileSync(join(VOICE_DIR, file), Buffer.from(b64, 'base64'));
+    panelSay({ text, kind: 'voice', file });
+  },
+  typing() {}, // 面板看 busyVia
+};
+const CH = { qq: { text: sendText, sticker: sendSticker, voice: sendVoice, typing }, panel: PANEL };
+
+/** 号主在面板聊天框里说了一句 */
+export async function panelChat(text) {
+  const t = String(text || '').trim().slice(0, 2000);
+  if (!t) throw new Error('说点什么呀');
+  await take(t, 'panel');
+  return { ok: true };
+}
+
+/** 面板聊天框要的：最近的聊天（两条线都有，after 之后的），她是不是正在想面板这边的回复 */
+export function chatView(after = '') {
+  const list = after ? owner.readChat().filter((e) => e.ts > after && e.kind !== 'reset') : owner.recentChat(60);
+  return {
+    list: list.slice(-100).map(({ ts, from, text, kind, via, file }) => ({ ts, from, text, kind: kind || 'text', via: via || 'qq', file })),
+    typing: busyVia === 'panel' || queues.panel.length > 0,
+    llm: llm.llmReady(),
+  };
 }
 
 /** 面板「解绑」：Telegram 上绑错人了，清掉，下一个私聊 bot 的人重新认 */
@@ -370,7 +417,7 @@ async function tick(now = Date.now()) {
     return;
   }
 
-  if (!brain.reachOutDue(now, cfg.qq, st) || busy || queue.length || !llm.llmReady() || Math.random() > 0.5) return;
+  if (!brain.reachOutDue(now, cfg.qq, st) || busy || queues.qq.length || queues.panel.length || !llm.llmReady() || Math.random() > 0.5) return;
   const s2 = readState();
   const prev = s2.reachOut?.date === today ? s2.reachOut : { date: today, n: 0 };
   writeState({ ...s2, reachOut: { ...prev, triedAt: now } });

@@ -76,9 +76,12 @@ export function factsText(facts = readFacts()) {
 
 // ─── 聊天记录 ──────────────────────────────────────────────
 // from: owner / her；kind: text（默认）/ sticker / voice / proactive（她主动找的）/ report（后台汇报）/ notice（提醒）
-export function logChat({ from, text, kind }) {
+// via: 在哪说的，qq（默认，不写）/ panel（号主在面板聊天框里打的、她回在面板里的）；file：面板里的语音文件名
+export function logChat({ from, text, kind, via, file }) {
   const e = { ts: nowIso(), from, text: String(text || '').slice(0, 2000) };
   if (kind && kind !== 'text') e.kind = kind;
+  if (via && via !== 'qq') e.via = via;
+  if (file) e.file = file;
   appendJsonl(CHAT, e);
   return e;
 }

@@ -159,7 +159,7 @@ node diary.mjs add --type like  --bvid BV1xx --title "视频标题"
 ### 交给后台（号主在 QQ 里让你去干活）
 
 号主在 QQ 里说「去刷几个猫猫视频」「看看有没有新评论」这类话时，别自己一步步调工具，
-先应一声，然后 `node panel/bg.mjs "号主的原话"` 交给面板后台（看消息加 `--type check`，写日记加 `--type diary`）。
+先应一声，然后 `node panel/bg.mjs "号主的原话"` 交给面板后台（看消息加 `--type check`，写日记加 `--type diary`，看直播加 `--type live`）。
 后台按这句话解析计划、去做，做完用你的口吻在 QQ 里汇报；评论、回复、日记照样先进「待审」。
 QQ 只允许在号主说话后一小时内回复，超时的汇报会排队，等号主下次开口时补发。
 

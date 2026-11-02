@@ -275,6 +275,13 @@ export const DEFAULT_CONFIG = {
   },
   // 碰到风控码后歇多久（分钟）
   cooldownMin: 120,
+  // B站 直播（bililive.mjs）：号主派的随时去；enabled 是「自动养号时自己偶尔去看一会儿」
+  live: {
+    enabled: false,
+    perDay: 1,
+    // 一场看几分钟
+    minutes: 5,
+  },
   // 贴吧 / 抖音：她自己去逛（web.mjs 开一个独立 Chrome，登录态持久化在 data/web-browser）
   // 和 B站 那套并行但完全独立 —— 没有经验值、没有投币，只有「逛、看、偶尔说一句」
   //

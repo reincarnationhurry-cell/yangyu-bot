@@ -982,3 +982,80 @@ export async function qrLoginPoll(key) {
   renameSync(tmp, COOKIE_FILE);
   return { status: 'ok', uid: ck.dede_user_id };
 }
+
+// ─── 直播 ──────────────────────────────────────────────────
+// 看直播只用读接口：房间信息、关键帧封面、最近的弹幕（gethistory 一次给最近十来条，隔一会儿拉一次就是「在看」）。
+// 进房间那一下（roomEntryAction）会记进 B站 的观看历史，跟真人点进去一样；不发弹幕。
+const LIVE = 'https://api.live.bilibili.com';
+const liveRef = (roomid) => ({ headers: { Referer: `https://live.bilibili.com/${roomid || ''}`, Origin: 'https://live.bilibili.com' } });
+const https = (u) => (u ? String(u).replace(/^\/\//, 'https://').replace(/^http:/, 'https:') : '');
+const plain = (s) => String(s || '').replace(/<[^>]+>/g, '').trim();
+
+function mapLiveRoom(x) {
+  return {
+    roomid: String(x.roomid || x.room_id || ''),
+    uid: String(x.uid || x.mid || ''),
+    uname: plain(x.uname || x.anchor_name || x.name),
+    title: plain(x.title),
+    area: x.area_v2_name || x.area_name || x.cate_name || '',
+    online: Number(x.online || x.watched_show?.num || 0),
+    cover: https(x.cover_from_user || x.user_cover || x.cover || x.keyframe || x.pic),
+  };
+}
+
+/** 关注的人里正在播的 */
+export async function liveFollowing() {
+  const r = await jget(`${LIVE}/xlive/web-ucenter/v1/xfetter/GetWebList?page=1&page_size=20`, liveRef());
+  if (r.code !== 0) throw new BiliError(`取关注的直播失败：${r.message}`, r.code);
+  return (r.data?.rooms || r.data?.list || []).map(mapLiveRoom).filter((x) => x.roomid);
+}
+
+/** 直播首页推荐 */
+export async function liveRecommend(ps = 20) {
+  // 不带 Wbi 签名会被 -352
+  const signed = await signWbi({ page: '1', page_size: String(ps), platform: 'web' });
+  const r = await jget(`${LIVE}/xlive/web-interface/v1/second/getUserRecommend?` + new URLSearchParams(signed), liveRef());
+  if (r.code !== 0) throw new BiliError(`取直播推荐失败：${r.message}`, r.code);
+  return (r.data?.list || []).map(mapLiveRoom).filter((x) => x.roomid);
+}
+
+/** 按关键词搜正在播的房间 */
+export async function searchLive(keyword) {
+  const signed = await signWbi({ search_type: 'live_room', keyword, page: '1' });
+  const r = await jget('https://api.bilibili.com/x/web-interface/wbi/search/type?' + new URLSearchParams(signed));
+  if (r.code !== 0) throw new BiliError(`搜直播失败：${r.message}`, r.code);
+  return (r.data?.result || []).filter((x) => Number(x.live_status ?? 1) === 1).map(mapLiveRoom).filter((x) => x.roomid);
+}
+
+/** 房间信息：标题、分区、在不在播、关键帧；live: true 才是正在播 */
+export async function liveRoom(roomid) {
+  const r = await jget(`${LIVE}/room/v1/Room/get_info?room_id=${encodeURIComponent(roomid)}`, liveRef(roomid));
+  if (r.code !== 0) throw new BiliError(`取直播间失败：${r.message}`, r.code);
+  const d = r.data || {};
+  let uname = '';
+  const m = await jget(`${LIVE}/live_user/v1/Master/info?uid=${d.uid}`, liveRef(roomid)).catch(() => null);
+  if (m?.code === 0) uname = m.data?.info?.uname || '';
+  return {
+    ...mapLiveRoom({ ...d, roomid: d.room_id, uname }),
+    live: d.live_status === 1,
+    keyframe: https(d.keyframe),
+    description: plain(d.description).slice(0, 300),
+    tags: String(d.tags || '').split(',').filter(Boolean).slice(0, 8),
+    startedAt: d.live_time && d.live_time !== '0000-00-00 00:00:00' ? d.live_time : '',
+  };
+}
+
+/** 最近的弹幕（B站 只给最近十来条） */
+export async function liveDanmaku(roomid) {
+  const r = await jget(`${LIVE}/xlive/web-room/v1/dM/gethistory?roomid=${encodeURIComponent(roomid)}&room_type=0`, liveRef(roomid));
+  if (r.code !== 0) throw new BiliError(`取弹幕失败：${r.message}`, r.code);
+  return (r.data?.room || []).map((x) => ({ user: x.nickname || '', text: plain(x.text), at: x.timeline || '' })).filter((x) => x.text);
+}
+
+/** 点进直播间（进 B站 的观看历史）。没成功不要紧，看还是能看 */
+export async function enterLiveRoom(roomid) {
+  await jpost(`${LIVE}/xlive/web-room/v1/index/roomEntryAction`, { room_id: String(roomid), platform: 'pc' }, {
+    referer: `https://live.bilibili.com/${roomid}`, origin: 'https://live.bilibili.com',
+  });
+  return { ok: true };
+}

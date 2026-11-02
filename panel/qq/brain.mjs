@@ -46,7 +46,7 @@ const HOW = `## 在 QQ 里怎么做事（你现在用的是自己的 QQ 号，�
   他纠正你记错的，用 fix_fact 改。
 - 他问起以前的事、你自己刷过的东西，记不清就调 recall 翻一翻；翻不到就说不记得，别编。
 - 让你去 B站 干活（刷几个、点赞收藏、去评论、看新消息、写日记），调 bili_task 交给后台，同时回一句「好，我去」就行，做完后台会自己跟他说。
-  让你去逛贴吧、刷抖音，也调 bili_task，type 填 tieba / douyin。
+  让你去逛贴吧、刷抖音，也调 bili_task，type 填 tieba / douyin；让你去看直播，type 填 live（他点名了谁、哪个房间，填进 keyword）。
   问「做完没」调 bili_tasks。BV 号必须是搜出来的或他给的，绝不凭记忆编。
 - 他说「我打游戏了」「开会呢」「先别吵」就调 pause；说「好了」「打完了」就调 resume。没说就照常。
 - 他回「可以」「发吧」「改成……」「算了」这种没头没尾的话，多半是在回待审提醒：先调 reviews 看看，再用 review_decide。
@@ -74,8 +74,9 @@ export function toolDefs() {
     }, ['text']),
     fn('fix_fact', '改正 / 删掉一条记错了的号主的事（id 是事实前面 # 后面那串）。text 留空就是删掉', { id: { type: 'string' }, text: { type: 'string' } }, ['id']),
     fn('recall', '翻翻自己的记忆：以前刷过的视频、跟谁聊过、以前跟号主聊过的话', { query: { type: 'string' } }, ['query']),
-    fn('bili_task', '把 B站 的活交给后台（刷视频、点赞收藏、评论、看新消息、写日记），或者去逛一轮贴吧 / 刷一轮抖音。做完后台会在 QQ 里跟号主汇报', {
-      request: { type: 'string', description: '号主的原话' }, type: { type: 'string', enum: ['custom', 'check', 'diary', 'tieba', 'douyin'], description: 'check=看新评论私信，diary=写今天的日记，tieba=逛贴吧，douyin=刷抖音，其他都是 custom' },
+    fn('bili_task', '把 B站 的活交给后台（刷视频、点赞收藏、评论、看新消息、写日记、看直播），或者去逛一轮贴吧 / 刷一轮抖音。做完后台会在 QQ 里跟号主汇报', {
+      request: { type: 'string', description: '号主的原话' }, type: { type: 'string', enum: ['custom', 'check', 'diary', 'tieba', 'douyin', 'live'], description: 'check=看新评论私信，diary=写今天的日记，tieba=逛贴吧，douyin=刷抖音，live=去 B站 看直播，其他都是 custom' },
+      keyword: { type: 'string', description: 'type=live 时：他点名要看的主播名 / 关键词 / 房间号；没点名就不填，你自己挑' },
     }, ['request']),
     fn('bili_tasks', '看看交给后台的活做到哪了'),
     fn('pause', '号主要你先停（打游戏、开会）：后台不刷、不回评论、不主动找他', { reason: { type: 'string' }, hours: { type: 'number', description: '他说了多久就填，没说就不填' } }),
@@ -133,8 +134,10 @@ export async function runTool(name, args, out) {
       const web = a.type === 'tieba' || a.type === 'douyin';
       // 风控冷却只管 B站，贴吧 / 抖音照去
       if (!web && readState().cooldownUntil > Date.now()) return '风控冷却中，B站 现在先别碰，跟他说一声晚点再去';
-      const type = web ? `web_${a.type}` : ['check', 'diary'].includes(a.type) ? a.type : 'custom';
-      const task = addTask({ type, note: String(a.request || '').slice(0, 200), executor: 'panel', source: 'bot', report: 'qq' });
+      const type = web ? `web_${a.type}` : ['check', 'diary', 'live'].includes(a.type) ? a.type : 'custom';
+      const kw = String(a.keyword || '').trim().slice(0, 30);
+      const payload = type === 'live' && kw ? (/^\d{2,12}$/.test(kw) ? { room: kw } : { keyword: kw }) : undefined;
+      const task = addTask({ type, payload, note: String(a.request || '').slice(0, 200), executor: 'panel', source: 'bot', report: 'qq' });
       auto.runTask(task).catch((e) => updateTask(task.id, { status: 'failed', resultNote: e.message }));
       out.task = task.id;
       return '交给后台了，做完会自己跟他说；你这条回复就说一声「好，我去」之类的';

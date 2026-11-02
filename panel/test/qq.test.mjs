@@ -364,3 +364,27 @@ test('Telegram 整条链路：第一个私聊的认成号主 → 回他；别人
   const bad = new Telegram({ token: 'x', fetchImpl: async () => new Response(JSON.stringify({ ok: false, description: 'Unauthorized' }), { status: 401 }) });
   await assert.rejects(() => bad.call('getMe'), /token 不对/);
 });
+
+// ─── 面板聊天框（2026-11-02 加的）：同一个她、同一份聊天记录，回在面板里不发 QQ ──────
+test('面板聊天：QQ 没连也能聊；回复写进记录（via panel）；QQ 上聊过的她接得上', async () => {
+  store.writeConfig({ qq: { mode: 'onebot', ownerQQ: '10086', reachOut: false, voiceChance: 0 } });
+  const qq = await import('../qq/index.mjs');
+  qq.stop(); // 小号断着：面板照样能聊
+  owner.logChat({ from: 'owner', text: '我明天要去面试' }); // 先前在 QQ 上说的
+  await assert.rejects(qq.panelChat('  '), /说点什么/);
+  const n0 = llmCalls.length;
+  llmQueue.push({ content: '紧张吗？我陪你练练' });
+  const t0 = new Date().toISOString();
+  await sleep(2); // chatView 只要严格晚于 after 的，别跟 t0 撞在同一毫秒
+  await qq.panelChat('有点紧张');
+  assert.equal(qq.chatView(t0).typing, true, '还没回的时候显示正在输入');
+  const her = () => qq.chatView(t0).list.find((e) => e.from === 'her');
+  assert.ok(await until(her), '8 秒内应该回了');
+  assert.equal(llmCalls.length, n0 + 1);
+  const msgs = llmCalls.at(-1).messages;
+  assert.ok(msgs.some((m) => m.role === 'user' && m.content.includes('我明天要去面试')), 'QQ 上聊过的要带上');
+  assert.equal(msgs.at(-1).content, '有点紧张');
+  const v = qq.chatView(t0);
+  assert.deepEqual(v.list.map((e) => [e.from, e.via, e.text]), [['owner', 'panel', '有点紧张'], ['her', 'panel', '紧张吗？我陪你练练']]);
+  assert.equal(v.typing, false);
+});

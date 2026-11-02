@@ -11,6 +11,7 @@
  *   node panel/bg.mjs "…" --type diary        起草今天的日记进待审
  *   node panel/bg.mjs "…" --type tieba        去逛一轮贴吧（逛哪些吧照面板里填的）
  *   node panel/bg.mjs "…" --type douyin       去刷一轮抖音
+ *   node panel/bg.mjs "…" --type live         去 B站 看一会儿直播（原话里有房间号 / 「看 XX 的直播」就看那个，没有她自己挑）
  *   node panel/bg.mjs list                    后台在做的、最近做完的
  *
  * 面板没开（launchd 没跑）会直接报错退出 —— 那就自己做，或者跟号主说一声。
@@ -36,8 +37,8 @@ if (args[0] === 'list') {
 
 const type = flag('type');
 const note = args.join(' ').trim();
-if (!note) fail('用法：node panel/bg.mjs "号主的原话" [--type check|diary|tieba|douyin] | list');
-if (type && !['check', 'diary', 'tieba', 'douyin'].includes(type)) fail(`不认识的 --type ${type}（只有 check / diary / tieba / douyin，其他活不用写 type）`);
+if (!note) fail('用法：node panel/bg.mjs "号主的原话" [--type check|diary|tieba|douyin|live] | list');
+if (type && !['check', 'diary', 'tieba', 'douyin', 'live'].includes(type)) fail(`不认识的 --type ${type}（只有 check / diary / tieba / douyin / live，其他活不用写 type）`);
 // 贴吧 / 抖音在任务箱里叫 web_tieba / web_douyin，跟 B站 的活分开
 const taskType = type === 'tieba' || type === 'douyin' ? `web_${type}` : type || 'custom';
 

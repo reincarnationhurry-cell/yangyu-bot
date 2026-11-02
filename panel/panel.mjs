@@ -29,6 +29,7 @@ import * as web from './web.mjs';
 import * as webvisit from './webvisit.mjs';
 import * as tieba from './tieba.mjs';
 import * as douyin from './douyin.mjs';
+import * as bililive from './bililive.mjs';
 import { openAsHer } from './browser.mjs';
 import {
   FILES, SHICHEN, localDate, logAction, readActions, readTasks, addTask, updateTask,
@@ -124,8 +125,21 @@ async function readBody(req) {
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
-  '.ico': 'image/x-icon', '.json': 'application/json',
+  '.ico': 'image/x-icon', '.json': 'application/json', '.mp3': 'audio/mpeg',
 };
+
+/** 聊天框里的语音、表情包：只认文件名（不带路径），只从这两个目录里拿 */
+function serveChatMedia(res, p, q) {
+  const dirs = { '/api/chat/voice': [qq.VOICE_DIR, '.mp3'], '/api/chat/sticker': [join(here, '..', 'stickers'), '.png'] };
+  const [dir, ext] = dirs[p] || [];
+  const name = String(q.get('f') || '');
+  if (!dir || !/^[\w\u4e00-\u9fff.-]{1,80}$/.test(name) || name.includes('..')) return false;
+  const file = join(dir, name.endsWith(ext) ? name : name + ext);
+  if (!existsSync(file)) return false;
+  res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control': 'private, max-age=86400' });
+  res.end(readFileSync(file));
+  return true;
+}
 function serveStatic(res, p) {
   const rel = normalize(p === '/' ? '/index.html' : p).replace(/^(\.\.[/\\])+/, '');
   const file = join(PUBLIC, rel);
@@ -526,6 +540,38 @@ const routes = {
     return auto.publishDiary(text, 'panel', { force: true });
   },
 
+  // ─── 面板聊天框：跟 QQ 同一个她、同一份聊天记录 ─────────────────
+  'GET /api/chat': async (q) => qq.chatView(String(q.get('after') || '')),
+  'POST /api/chat': async (_q, b) => qq.panelChat(b.text),
+
+  // ─── B站 直播 ──────────────────────────────────────────────
+  'GET /api/live': async () => bililive.view(),
+  'POST /api/live/config': async (_q, b) => {
+    const c = b?.live || b || {};
+    const patch = {};
+    if ('enabled' in c) patch.enabled = !!c.enabled;
+    if ('perDay' in c) patch.perDay = Math.min(6, Math.max(0, Number(c.perDay) || 0));
+    if ('minutes' in c) patch.minutes = Math.min(30, Math.max(1, Number(c.minutes) || 5));
+    writeConfig({ live: patch });
+    return bililive.view();
+  },
+  // 面板「去看直播」：跟 QQ 里派的一样走任务箱，活动记录里看得到
+  'POST /api/live/watch': async (_q, b) => {
+    if (bililive.isBusy()) throw new Error('她正在看直播，等这场看完');
+    if (readState().cooldownUntil > Date.now()) throw new Error('风控冷却中，先在总览里解除冷却');
+    const target = String(b.target || '').trim().slice(0, 60);
+    const room = bililive.roomFrom(target) || (/^\d{2,12}$/.test(target) ? target : '');
+    const payload = room ? { room } : target ? { keyword: target } : {};
+    const task = addTask({ type: 'live', payload, note: target ? `去看「${target}」的直播` : '随便看会儿直播', executor: 'panel', source: 'panel' });
+    auto.runTask(task).catch(() => {});
+    return { ok: true, task };
+  },
+  'POST /api/live/stop': async () => { bililive.stop(); return { ok: true }; },
+  'GET /api/live/search': async (q) => {
+    const kw = String(q.get('q') || '').trim();
+    return { list: kw ? await bili.searchLive(kw) : await bili.liveFollowing().catch(() => []) };
+  },
+
   // ─── 贴吧 / 抖音：她自己去逛 ───────────────────────────────
   'GET /api/web': async () => ({ ...webvisit.view(), browser: await web.status() }),
   'POST /api/web/config': async (_q, b) => {
@@ -591,6 +637,7 @@ const server = createServer(async (req, res) => {
     if (serveStatic(res, p)) return;
     return json(res, 404, { error: 'not found' });
   }
+  if (req.method === 'GET' && p.startsWith('/api/chat/') && serveChatMedia(res, p, url.searchParams)) return;
   const handler = routes[`${req.method} ${p}`];
   if (!handler) return json(res, 404, { error: 'not found' });
   try {

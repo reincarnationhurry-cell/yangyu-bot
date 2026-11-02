@@ -45,6 +45,12 @@ for p in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" "/Applic
   [[ -x "$p" ]] && { CHROME="$p"; break; }
 done
 if [[ -n "${WEB_BROWSER:-}$CHROME" ]]; then ok "浏览器 ${WEB_BROWSER:-$CHROME}"; else warn "没找到 Chrome：逛贴吧、刷抖音要用"; fi
+# macOS：她的无头浏览器要是用系统 Chrome，号主点 Dock 上的 Chrome 会叫醒那个没窗口的实例、自己的打不开。
+# 给她单独装一份 Chrome for Testing（另一个 app，互不相干），装不上也不影响别的
+if [[ "$OS" == Darwin && -z "${WEB_BROWSER:-}" ]]; then
+  if node "$HERE/panel/install-chrome.mjs"; then ok "她专用的 Chrome for Testing"
+  else warn "Chrome for Testing 没装上：先用系统 Chrome，之后可以再跑 node panel/install-chrome.mjs"; fi
+fi
 
 mkdir -p "$HERE/panel/data"
 chmod +x "$HERE/panel/"*.sh 2>/dev/null || true

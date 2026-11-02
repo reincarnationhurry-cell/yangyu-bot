@@ -14,37 +14,21 @@
  *
  * 不是绕风控：真浏览器、真人点击，只是不重新登录。浏览器指纹一点没动。
  *
- * 需要：Google Chrome / Edge / Chromium（BILI_BROWSER 可指定可执行文件）；Node ≥ 22（内置 WebSocket）。
+ * 需要：自带的 Chrome for Testing（node panel/install-chrome.mjs），或 Google Chrome / Edge / Chromium（BILI_BROWSER 可指定可执行文件）；Node ≥ 22（内置 WebSocket）。
  */
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadCookie, getDevice } from './bili.mjs';
+import { findChrome, bundledArgs } from './chrome.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PROFILE = join(here, 'data', 'bili-browser');
 
-const CANDIDATES = [
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/microsoft-edge',
-];
 
 function findBrowser() {
-  const custom = process.env.BILI_BROWSER;
-  if (custom) {
-    if (!existsSync(custom)) throw new Error(`BILI_BROWSER 指的 ${custom} 不存在`);
-    return custom;
-  }
-  const hit = CANDIDATES.find((p) => existsSync(p));
-  if (!hit) throw new Error('没找到 Chrome / Edge / Chromium。装一个，或者用 BILI_BROWSER 环境变量指定路径');
-  return hit;
+  return findChrome('BILI_BROWSER');
 }
 
 /** 专用窗口已经开着的话，拿它的 DevTools 地址 */
@@ -63,8 +47,10 @@ async function existingEndpoint() {
 
 async function launch() {
   mkdirSync(PROFILE, { recursive: true });
-  const child = spawn(findBrowser(), [
+  const bin = findBrowser();
+  const child = spawn(bin, [
     `--user-data-dir=${PROFILE}`,
+    ...bundledArgs(bin),
     '--remote-debugging-port=0', // 随机端口，只监听本机；实际端口写在 DevToolsActivePort
     '--no-first-run',
     '--no-default-browser-check',

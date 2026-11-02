@@ -19,30 +19,24 @@
  *     号主正在用电脑就被打断。无头版的 UA 里写着 HeadlessChrome，会被站点认出来，
  *     所以每个页面都把 UA 和 userAgentData 改回普通 Chrome 的样子。
  *     要看她在干嘛（或者扫码后要在网页上再验证一步），面板「逛逛」里打开「显示浏览器窗口」。
+ *  5. 优先用自带的 Chrome for Testing（chrome.mjs 讲了为什么）：用系统 Chrome 的话，
+ *     号主点 Dock 上的 Chrome 会叫醒这个没窗口的实例，自己的 Chrome 打不开。
+ *     另外闲了几分钟就自己关掉，别一直挂在后台。
  *
- * 需要：Google Chrome（WEB_BROWSER 可指定路径）、Node ≥ 18（cdp.mjs 不依赖内置 WebSocket）。
+ * 需要：Chrome for Testing（node panel/install-chrome.mjs）或 Google Chrome（WEB_BROWSER 可指定路径）、Node ≥ 18（cdp.mjs 不依赖内置 WebSocket）。
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readlinkSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connectWs } from './cdp.mjs';
 import { readConfig } from './store.mjs';
+import { findChrome, bundledArgs, isBundled } from './chrome.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DATA = process.env.YANGYU_DATA || join(here, 'data');
 const PROFILE = join(DATA, 'web-browser');
 
-const CANDIDATES = [
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-  '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-  '/usr/bin/google-chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/microsoft-edge',
-];
 
 /** 正常参数；沙箱里起不来就用 fallback */
 const ARGS_BASE = [
@@ -66,14 +60,7 @@ export function wantWindow() {
 const ARGS_SANDBOXLESS = ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'];
 
 function findBrowser() {
-  const custom = process.env.WEB_BROWSER;
-  if (custom) {
-    if (!existsSync(custom)) throw new Error(`WEB_BROWSER 指的 ${custom} 不存在`);
-    return custom;
-  }
-  const hit = CANDIDATES.find((p) => existsSync(p));
-  if (!hit) throw new Error('没找到 Chrome / Edge / Chromium，装一个，或者用 WEB_BROWSER 环境变量指定路径');
-  return hit;
+  return findChrome('WEB_BROWSER');
 }
 
 /** 面板「上手」用：找得到浏览器就给路径，找不到给 null */
@@ -160,13 +147,16 @@ export async function browser() {
       }
     }
     throw new Error(`浏览器起不来：${lastErr?.message || '未知原因'}`);
-  })().finally(() => { connecting = null; });
+  })().then((c) => { armIdle(); return c; }).finally(() => { connecting = null; });
   return connecting;
 }
 
 async function attach(wsUrl) {
   const c = await connectWs(wsUrl);
   c.on('close', () => { if (conn === c) conn = null; });
+  // 页面上的每个动作都走这里，拿来算「多久没用了」
+  const send = c.send.bind(c);
+  c.send = (...a) => { touch(); return send(...a); };
   return c;
 }
 
@@ -179,7 +169,8 @@ async function prepare(c) {
   const ua = v?.userAgent || '';
   c.headless = /HeadlessChrome/.test(ua) || /^HeadlessChrome/.test(v?.product || '');
   c.uaOverride = null;
-  if (!c.headless) return;
+  // 有窗口的 Chrome for Testing 也要套：它的 userAgentData.brands 里没有 Google Chrome
+  if (!c.headless && !isBundled(browserPath())) return;
   const full = (/Chrome\/([\d.]+)/.exec(ua) || [])[1] || '';
   const major = full.split('.')[0] || '';
   c.uaOverride = {
@@ -221,10 +212,12 @@ async function alive(c) {
 
 async function launch(mode) {
   mkdirSync(PROFILE, { recursive: true });
+  const bin = findBrowser();
   const args = [
     `--user-data-dir=${PROFILE}`,
     '--remote-debugging-port=0', // 随机端口，只监听本机
     ...ARGS_BASE,
+    ...bundledArgs(bin),
     ...(mode === 'sandboxless' ? ARGS_SANDBOXLESS : []),
     ...(wantWindow() ? [] : ARGS_HEADLESS),
     '--window-size=1280,900',
@@ -232,7 +225,7 @@ async function launch(mode) {
   ];
   // 上一个实例留下的端口文件会让下面的轮询先连到一个已经死掉的端口上
   try { rmSync(join(PROFILE, 'DevToolsActivePort'), { force: true }); } catch { /* 删不掉也只是多等一轮 */ }
-  const child = spawn(findBrowser(), args, { detached: true, stdio: 'ignore' });
+  const child = spawn(bin, args, { detached: true, stdio: 'ignore' });
   child.on('error', () => {});
   child.unref();
   let c = null;
@@ -303,6 +296,7 @@ export async function openPage(url, { timeoutMs = 20000 } = {}) {
   const { targetId } = await c.send('Target.createTarget', { url: 'about:blank', background: true });
   const { sessionId } = await c.send('Target.attachToTarget', { targetId, flatten: true });
   const page = new Page(c, targetId, sessionId);
+  openTargets.add(targetId);
   if (c.uaOverride) await page.send('Emulation.setUserAgentOverride', c.uaOverride).catch(() => {});
   await page.enable();
   if (url) await page.goto(url, { timeoutMs });
@@ -407,6 +401,7 @@ export class Page {
   }
 
   async close() {
+    openTargets.delete(this.targetId);
     await this.c.send('Target.closeTarget', { targetId: this.targetId }).catch(() => {});
   }
 }
@@ -434,15 +429,66 @@ export async function status() {
   };
 }
 
-/** 关掉浏览器（她逛完、或者卡住了要重开） */
+/**
+ * 关掉浏览器（她逛完、闲太久、或者卡住了要重开）。
+ * 不光关自己连着的那个：面板重启前留下的实例也认得出来（看配置目录里的调试端口和 SingletonLock）。
+ * Browser.close 没反应就直接杀 —— 卡死的无头 Chrome 正是「号主的 Chrome 打不开」的元凶。
+ */
 export async function shutdown() {
+  const port = devToolsPort();
+  const pid = lockPid();
   try {
-    if (conn && !conn.closed) {
-      await conn.send('Browser.close').catch(() => {});
-      conn.close();
+    let c = conn && !conn.closed ? conn : null;
+    if (!c && port) {
+      const ws = await liveWs(port);
+      if (ws) c = await connectWs(ws).catch(() => null);
+    }
+    if (c) {
+      await withTimeout(c.send('Browser.close'), 3000, '浏览器没有响应').catch(() => {});
+      c.close();
     }
   } catch { /* 已经关了 */ }
   conn = null;
+  openTargets.clear();
+  if (port) await waitGone(port);
+  if (pid && isRunning(pid)) await killTree(pid);
+}
+
+/** SingletonLock 是个指向「主机名-pid」的符号链接，Chrome 活着的时候一直在 */
+function lockPid() {
+  try {
+    const m = /-(\d+)$/.exec(readlinkSync(join(PROFILE, 'SingletonLock')));
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRunning(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+// ─── 闲了就关 ──────────────────────────────────────────────
+// 没有开着的页面、5 分钟没动静就关；留着的页面（扫码登录那种）最多等 30 分钟。
+// 显示窗口的时候不管：号主看得见，想关自己关。下次要用会自己再拉起来，只多几秒。
+const IDLE_MS = Number(process.env.WEB_IDLE_MIN ?? 5) * 60_000; // WEB_IDLE_MIN=0 不自动关
+const IDLE_MAX_MS = 30 * 60_000;
+const openTargets = new Set();
+let lastUse = Date.now();
+let idleTimer = null;
+
+function touch() { lastUse = Date.now(); }
+
+function armIdle() {
+  touch();
+  if (idleTimer || !IDLE_MS) return;
+  idleTimer = setInterval(() => {
+    if (!conn || conn.closed) { clearInterval(idleTimer); idleTimer = null; return; }
+    if (wantWindow()) return;
+    const quiet = Date.now() - lastUse;
+    if (quiet > IDLE_MAX_MS || (quiet > IDLE_MS && !openTargets.size)) shutdown().catch(() => {});
+  }, Math.min(60_000, IDLE_MS));
+  idleTimer.unref(); // 别因为这个定时器让进程退不掉
 }
 
 /** 给用户看的登录窗口：把某个站点打开并留在那儿，让他自己扫码 */

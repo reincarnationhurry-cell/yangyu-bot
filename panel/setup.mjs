@@ -7,6 +7,7 @@
 import * as llm from './llm.mjs';
 import * as bili from './bili.mjs';
 import * as web from './web.mjs';
+import { isBundled } from './chrome.mjs';
 import * as webvisit from './webvisit.mjs';
 import * as voice from './qq/voice.mjs';
 import * as napcat from './qq/napcat.mjs';
@@ -48,8 +49,10 @@ export async function checks() {
     '「总览」页点「扫码登录」，用专门给她的那个号扫', 'overview');
 
   const browser = web.browserPath();
-  add('browser', '浏览器（逛贴吧 / 刷抖音）', browser, browser || '没找到 Chrome / Edge / Chromium',
-    '装一个 Chrome，或者用环境变量 WEB_BROWSER 指定路径', 'web', true);
+  const sharesChrome = process.platform === 'darwin' && browser && !isBundled(browser) && !process.env.WEB_BROWSER;
+  add('browser', '浏览器（逛贴吧 / 刷抖音）', browser, !browser ? '没找到 Chrome / Edge / Chromium'
+    : sharesChrome ? `${browser}（和你的 Chrome 是同一个 app，她在后台跑时你的 Chrome 可能打不开；跑 node panel/install-chrome.mjs 给她单独装一份）` : browser,
+    '跑 node panel/install-chrome.mjs，或者装一个 Chrome，或者用环境变量 WEB_BROWSER 指定路径', 'web', true);
   if (browser) {
     const ls = await soft(webvisit.loginState(), 20000).catch(() => null);
     const names = ls ? ['tieba', 'douyin'].filter((k) => ls[k]?.ok).map((k) => ({ tieba: '贴吧', douyin: '抖音' })[k]) : [];

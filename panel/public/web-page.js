@@ -102,9 +102,9 @@ async function pageWeb(main) {
           ${num('web.tieba.readMaxSec', '一个帖子最多看几秒', { max: 600 })}
           ${sel('web.tieba.reply.mode', '回帖', [['off', '不回，只看'], ['task', '交给她在 QQ 里回'], ['llm', 'AI 起草']])}
           ${num('web.tieba.reply.chance', '一个帖子回的概率 %', { pct: 1, max: 100 })}
-          ${num('web.tieba.reply.dailyMax', '一天最多回几条', { max: 10 })}
+          ${num('web.tieba.reply.dailyMax', '一天最多回几条', { max: 30 })}
           ${num('web.tieba.followDailyMax', '一天最多关注几个吧', { max: 10 })}
-          ${tog('web.tieba.reply.review', 'AI 回帖先给我审', '贴吧回帖是公开的')}
+          ${tog('web.tieba.reply.review', 'AI 回帖先给我审', '贴吧回帖是公开的；关掉就是她自己直接发')}
         </div>
       </div>
       <div class="cfg-sec">
@@ -116,9 +116,11 @@ async function pageWeb(main) {
           ${num('web.douyin.watchMinSec', '一条至少看几秒', { max: 300 })}
           ${num('web.douyin.watchMaxSec', '一条最多看几秒', { max: 600 })}
           ${num('web.douyin.likeChance', '点赞概率 %', { pct: 1, max: 100 })}
-          ${num('web.douyin.likeDailyMax', '一天最多点几个赞', { max: 50 })}
+          ${num('web.douyin.likeDailyMax', '一天最多点几个赞', { max: 50, hint: '点赞从来不用审，靠这个兜住' })}
           ${sel('web.douyin.comments.mode', '评论', [['off', '不评论'], ['task', '交给她在 QQ 里评论'], ['llm', 'AI 起草']])}
-          ${num('web.douyin.comments.dailyMax', '一天最多评论几条', { max: 10 })}
+          ${num('web.douyin.comments.chance', '一条视频评论的概率 %', { pct: 1, max: 100 })}
+          ${num('web.douyin.comments.dailyMax', '一天最多评论几条', { max: 30 })}
+          ${tog('web.douyin.comments.review', 'AI 评论先给我审', '抖音评论是公开的；关掉就是她自己直接发')}
         </div>
         <div class="hint">没登录抖音时只能拿到热点榜（也够她刷了）；登录后才有推荐流和搜索。</div>
       </div>

@@ -337,10 +337,13 @@ async function clickByText(page, text, { tag = 'button, div[role="button"], a' }
   return true;
 }
 
-/** 真点击一个选择器命中的元素（同样走 Input.dispatchMouseEvent，理由同上） */
-async function clickBySelector(page, selector) {
+/**
+ * 真点击一个元素（同样走 Input.dispatchMouseEvent，理由同上）。
+ * find 是一段在页面里跑、返回元素的表达式；元素没尺寸（被藏起来了）就当没找到，不去点空气。
+ */
+async function clickEl(page, find) {
   const box = await page.eval(`(() => {
-    const el = document.querySelector(${JSON.stringify(selector)});
+    const el = (${find});
     if (!el) return null;
     el.scrollIntoView({ block: 'center' });
     const r = el.getBoundingClientRect();
@@ -348,13 +351,15 @@ async function clickBySelector(page, selector) {
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
   })()`).catch(() => null);
   if (!box) return false;
-  for (const type of ['mousePressed', 'mouseReleased']) {
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
     await page.send('Input.dispatchMouseEvent', {
       type, x: box.x, y: box.y, button: 'left', clickCount: 1,
     }).catch(() => {});
   }
   return true;
 }
+
+const clickBySelector = (page, selector) => clickEl(page, `document.querySelector(${JSON.stringify(selector)})`);
 
 /** 滚页面，触发抖音的懒加载。窗口和内部滚动容器都要滚 —— 详情页的评论是在内层容器里滚的 */
 const SCROLL_ONCE = `(() => {
@@ -697,46 +702,68 @@ export async function postComment(vid, text, { throttle: t = throttle, opener = 
   guardThrottle('comment', t);
 
   return withPage(videoUrl(id), async (page) => {
-    const INPUT = '[data-e2e="comment-input"], textarea[placeholder*="评论"], div[contenteditable="true"]';
-    const ok = await page.eval(`(() => {
-      const el = document.querySelector(${JSON.stringify(INPUT)});
-      if (!el) return false;
-      el.scrollIntoView({ block: 'center' });
-      el.focus();
-      return true;
-    })()`).catch(() => false);
-    if (!ok) {
+    // 实测（2026-11-03）：评论框一开始只是一行占位字「留下你的精彩评论吧」（.comment-input-inner-container），
+    // 页面上根本没有可编辑的东西；得真点它一下，才会挂出 Draft.js 编辑器（.public-DraftEditor-content）。
+    // 以前直接找 contenteditable，一条都没发出去过。
+    const BOX = '.comment-input-inner-container, [data-e2e="comment-input"]';
+    const EDITOR = '.public-DraftEditor-content, [data-e2e="comment-input"] [contenteditable="true"]';
+    for (let i = 0; i < 12; i++) {
+      const ready = await page.eval(`!!document.querySelector(${JSON.stringify(BOX)})`).catch(() => false);
+      if (ready || page.interruptible) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (!(await clickBySelector(page, BOX))) {
       throw new DouyinError('找不到评论输入框，抖音可能改版了，或者这条视频不让评论', { code: 'no-input' });
     }
+    let focused = false;
+    for (let i = 0; i < 8 && !focused; i++) {
+      await new Promise((r) => setTimeout(r, 400));
+      focused = await page.eval(`(() => {
+        const el = document.querySelector(${JSON.stringify(EDITOR)});
+        if (!el) return false;
+        if (document.activeElement !== el) el.focus();
+        return document.activeElement === el;
+      })()`).catch(() => false);
+      if (page.interruptible) break;
+    }
+    if (!focused) throw new DouyinError('点了评论框，但编辑器没出来，抖音可能改版了', { code: 'no-input' });
 
-    // contenteditable 和 textarea 填法不同：前者得走 execCommand 才会触发 React 的 onChange
-    await page.eval(`(() => {
-      const el = document.querySelector(${JSON.stringify(INPUT)});
-      if (!el) return false;
-      el.focus();
-      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-        const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (setter) setter.call(el, ${JSON.stringify(content)}); else el.value = ${JSON.stringify(content)};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-      } else {
-        document.execCommand('insertText', false, ${JSON.stringify(content)});
-        el.dispatchEvent(new InputEvent('input', { bubbles: true, data: ${JSON.stringify(content)} }));
-      }
-      return true;
-    })()`).catch(() => false);
-
+    // Draft.js 只认真的输入事件：改 innerText / execCommand 它的内部状态不跟着变，发出去是空的。
+    // CDP 的 Input.insertText 等同于输入法上屏，实测能正常打进去。
+    await page.send('Input.insertText', { text: content });
     await new Promise((r) => setTimeout(r, 600));
-    const sent = (await clickBySelector(page, '[data-e2e="comment-publish"]')) || (await clickBySelector(page, 'button[class*="publish"]'));
-    if (!sent) throw new DouyinError('找不到「发布」按钮，抖音可能改版了', { code: 'no-button' });
+    const typed = await page.eval(`(document.querySelector(${JSON.stringify(EDITOR)})?.innerText || '').includes(${JSON.stringify(content.slice(0, 20))})`)
+      .catch(() => false);
+    if (!typed) throw new DouyinError('评论内容没打进输入框，抖音可能改版了', { code: 'no-input' });
 
-    // 发完等一下，把回显读出来核对 —— 点了不等于发成功了
-    await new Promise((r) => setTimeout(r, 2500));
-    const echoed = await page.eval(`(() => {
-      const body = document.body ? document.body.innerText : '';
-      return body.includes(${JSON.stringify(content)});
-    })()`).catch(() => false);
+    // 发送键是编辑器右边那排图标的最后一个（@ / 表情 / 发送，类名全是 hash）。点不着就按回车，Draft 编辑器回车即发送
+    const SEND = `(() => {
+      const ct = document.querySelector('.commentInput-right-ct');
+      const icons = ct ? [...ct.querySelectorAll('span')].filter((s) => s.querySelector('svg')) : [];
+      return icons[icons.length - 1] || document.querySelector('[data-e2e="comment-publish"]');
+    })()`;
+    if (!(await clickEl(page, SEND))) {
+      for (const type of ['keyDown', 'keyUp']) {
+        await page.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }).catch(() => {});
+      }
+    }
+
+    // 发完等一下核对 —— 点了不等于发成功了。只看评论列表，不看整页：
+    // 没发出去时那句话还躺在输入框里，看整页会把它当成「发出去了」
+    let echoed = false;
+    for (let i = 0; i < 8 && !echoed; i++) {
+      await new Promise((r) => setTimeout(r, 800));
+      echoed = await page.eval(`(() => {
+        const list = document.querySelector('[data-e2e="comment-list"]');
+        return !!list && (list.innerText || '').includes(${JSON.stringify(content.slice(0, 20))});
+      })()`).catch(() => false);
+      if (page.interruptible) break;
+    }
     if (!echoed) {
+      const body = (await page.text().catch(() => '')) || '';
+      if (/验证|频繁|稍后再试/.test(body)) {
+        throw new DouyinError('抖音要验证 / 说太频繁了，这条没发出去', { code: 'risk' });
+      }
       throw new DouyinError('点了发布，但评论区没看到这条内容，可能被拦了（风控）', { code: 'not-confirmed' });
     }
 
@@ -766,29 +793,39 @@ export async function likeVideo(vid, on = true, { throttle: t = throttle } = {})
       await new Promise((r) => setTimeout(r, 900));
     }
 
-    // aria-pressed / class 里带 active 表示已经点过了，避免重复点反而取消
-    const before = await page.eval(`(() => {
+    // 点没点过看 data-e2e-state（实测 video-player-no-digged / video-player-is-digged），
+    // 老的 aria-pressed / class 判断留着兜底。点过了就别再点，不然反而取消
+    const LIKED = `(() => {
       const el = document.querySelector('[data-e2e="video-player-digg"]');
       if (!el) return null;
-      const pressed = el.getAttribute('aria-pressed');
-      const cls = (el.className || '').toString();
-      return { pressed, active: /active|selected|islike/i.test(cls) || pressed === 'true' };
-    })()`).catch(() => null);
-    if (!before) throw new DouyinError('找不到点赞按钮，抖音可能改版了', { code: 'no-button' });
+      const st = el.getAttribute('data-e2e-state') || '';
+      if (st) return /is-digged/.test(st);
+      return /active|selected|islike/i.test((el.className || '').toString()) || el.getAttribute('aria-pressed') === 'true';
+    })()`;
+    const before = await page.eval(LIKED).catch(() => null);
+    if (before === null) throw new DouyinError('找不到点赞按钮，抖音可能改版了', { code: 'no-button' });
 
-    if (before.active === want) {
+    if (before === want) {
       return { ok: true, vid: id, liked: want, already: true };
     }
 
-    const clicked = await clickBySelector(page, '[data-e2e="video-player-digg"]');
+    // 实测（2026-11-03）：播放器侧边那颗 video-player-digg 在详情页上被 display:none 藏着（0×0），
+    // 点它永远「点不动」。看得见的赞在视频下面那排数字里（赞 / 评论 / 收藏 / 分享），
+    // 分享那格有 data-e2e，它前面第一格就是赞。侧边那颗看得见的时候（窗口够宽）还是优先点它。
+    const clicked = (await clickBySelector(page, '[data-e2e="video-player-digg"]'))
+      || (await clickEl(page, `(() => {
+        const row = document.querySelector('[data-e2e="detail-video-info"] [data-e2e="video-share-icon-container"]')?.parentElement;
+        const cell = row?.children[0];
+        return cell?.querySelector('[tabindex]') || cell || null;
+      })()`));
     if (!clicked) throw new DouyinError('点赞按钮点不动，抖音可能改版了', { code: 'no-button' });
 
-    await new Promise((r) => setTimeout(r, 1200));
-    const after = await page.eval(`(() => {
-      const el = document.querySelector('[data-e2e="video-player-digg"]');
-      const cls = (el.className || '').toString();
-      return /active|selected|islike/i.test(cls) || el.getAttribute('aria-pressed') === 'true';
-    })()`).catch(() => null);
+    let after = null;
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 600));
+      after = await page.eval(LIKED).catch(() => null);
+      if (after === want || page.interruptible) break;
+    }
 
     if (after !== want) {
       throw new DouyinError(`点了${want ? '赞' : '取消赞'}，但状态没变，可能被拦了`, { code: 'not-confirmed' });

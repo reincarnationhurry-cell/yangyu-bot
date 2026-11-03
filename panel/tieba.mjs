@@ -551,7 +551,13 @@ export async function replyToThread(tidOrUrl, text) {
 
   const url = threadUrl(tid);
   return withPage(url, async (p) => {
-    await p.waitFor('document.querySelector(".pb-title, .core_title_txt")', { timeoutMs: 25_000 }).catch(() => null);
+    await p.waitFor('document.querySelector(".pb-title, .core_title_txt, .pc-pb-reply-box")', { timeoutMs: 25_000 }).catch(() => null);
+
+    // 新版电脑页（实测 2026-11-03）：楼下只有一行占位「参与讨论涨经验」，页面上没有任何输入框，
+    // 得真点一下才挂出 Quill 编辑器（.ql-editor），发布键是 .publish-btn。老页面那套找不到输入框，一条都没回出去过。
+    if (await p.eval('!!document.querySelector(".pc-pb-reply-box .reply-input")').catch(() => false)) {
+      return replyNewPc(p, { tid, url, body });
+    }
 
     // 输入框有三套可能的形态：直接 textarea / 富文本 contenteditable / 要先点「回复」才展开
     const found = await p.eval(`(() => {
@@ -629,6 +635,81 @@ export async function replyToThread(tidOrUrl, text) {
     }
     return { ok: true, tid, url, text: body, confirmed: proof.onPage ? 'on-page' : 'input-cleared', submittedAt: new Date().toISOString() };
   }, { timeoutMs: 60_000 });
+}
+
+/**
+ * 真点一下（Input.dispatchMouseEvent）。新版页面的占位框和发布键对 el.click() 不一定有反应，
+ * 跟抖音那边一个道理。find 是在页面里跑、返回元素的表达式；元素没尺寸就当没找到。
+ */
+async function realClick(p, find) {
+  const box = await p.eval(`(() => {
+    const el = (${find});
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+  })()`).catch(() => null);
+  if (!box) return false;
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+    await p.send('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 }).catch(() => {});
+  }
+  return true;
+}
+
+/** 新版电脑页的回帖：点占位框 → Quill 编辑器里打字 → 点「发布」→ 看新楼层 / 编辑器清空 */
+async function replyNewPc(p, { tid, url, body }) {
+  const EDITOR = '.pc-pb-reply-box .ql-editor';
+  if (!(await realClick(p, 'document.querySelector(".pc-pb-reply-box .reply-input")'))) {
+    throw new TiebaError('回帖框点不开，贴吧可能改版了', 'NO_INPUT');
+  }
+  let focused = false;
+  for (let i = 0; i < 8 && !focused; i++) {
+    await sleep(400);
+    focused = await p.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(EDITOR)});
+      if (!el) return false;
+      if (document.activeElement !== el) el.focus();
+      return document.activeElement === el;
+    })()`).catch(() => false);
+  }
+  if (!focused) {
+    const hint = await p.text().catch(() => '');
+    if (/先登录|登录后/.test(hint)) throw new TiebaError('还没登录贴吧，先扫码登录再回帖', 'NOT_LOGGED_IN');
+    throw new TiebaError('点了回帖框，但编辑器没出来，贴吧可能改版了', 'NO_INPUT');
+  }
+
+  // Quill 只认真的输入：改 innerHTML 它内部的内容不跟着变，「发布」也一直是灰的
+  await p.send('Input.insertText', { text: body });
+  await sleep(600);
+  const snippet = body.slice(0, 15);
+  const typed = await p.eval(`(document.querySelector(${JSON.stringify(EDITOR)})?.innerText || '').includes(${JSON.stringify(snippet)})`).catch(() => false);
+  if (!typed) throw new TiebaError('回帖内容填不进输入框，贴吧可能改版了', 'FILL');
+
+  const clicked = await realClick(p, `(() => {
+    const b = document.querySelector('.pc-pb-reply-box .publish-btn');
+    return b && !/disabled/.test(b.className) ? b : null;
+  })()`);
+  if (!clicked) throw new TiebaError('找不到能点的「发布」按钮，贴吧可能改版了（内容已填但没发出去）', 'NO_SUBMIT');
+
+  let proof = null;
+  for (let i = 0; i < 8; i++) {
+    await sleep(800);
+    proof = await p.eval(`(() => {
+      const snippet = ${JSON.stringify(snippet)};
+      const ed = document.querySelector(${JSON.stringify(EDITOR)});
+      const inBox = (ed?.innerText || '').includes(snippet);
+      const box = document.querySelector('.pc-pb-reply-box');
+      const rest = (document.body.innerText || '').replace(box ? box.innerText : '', '');
+      return { onPage: rest.includes(snippet), cleared: !inBox, risk: /验证码|安全验证|操作过于频繁/.test(document.body.innerText || '') };
+    })()`).catch(() => null);
+    if (proof?.risk || proof?.onPage) break;
+  }
+  if (proof?.risk) throw new TiebaError('贴吧要验证码（或者判定操作太快了），这条没发出去。过一会儿再试。', 'RISK');
+  if (!proof || !(proof.onPage || proof.cleared)) {
+    throw new TiebaError('点了发布，但看不出发没发出去（输入框里还是那句话）。去帖子里看一眼再决定要不要重发。', 'NOT_CONFIRMED');
+  }
+  return { ok: true, tid, url, text: body, confirmed: proof.onPage ? 'on-page' : 'input-cleared', submittedAt: new Date().toISOString() };
 }
 
 // ─── 关注吧（写操作）───────────────────────────────────────

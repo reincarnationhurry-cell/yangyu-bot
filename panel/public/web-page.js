@@ -7,7 +7,9 @@
 // app.js 里的 num/sel/tog 是 pageAutopilot 内部的局部函数，这里用不了，
 // 所以照同样的 data-path 约定在本地再定义一份 —— 好处是保存逻辑能共用一套。
 function webFieldGetters(cfg) {
-  const get = (path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), cfg);
+  // cfg 已经是 web 这一段了，data-path 却从 web. 开头：不去掉的话读的是 web.web.*，
+  // 表单显示的、保存的都是那份没人用的副本，真正生效的设置怎么改都不变
+  const get = (path) => path.replace(/^web\./, '').split('.').reduce((o, k) => (o == null ? undefined : o[k]), cfg);
   const num = (path, label, opt = {}) => {
     const v = get(path);
     const shown = opt.pct ? Math.round(Number(v || 0) * 100) : v;
@@ -150,7 +152,7 @@ async function pageWeb(main) {
     return patch;
   };
   $('#saveWeb').onclick = (e) => busy(e.target, async () => {
-    await api('/api/web/config', { web: collect() });
+    await api('/api/web/config', collect()); // collect() 按 data-path 建，自己就带着 web 这一层
     toast('设置已保存');
     S.webLogin = null;
     route();

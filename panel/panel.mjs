@@ -591,7 +591,10 @@ const routes = {
   'GET /api/web': async () => ({ ...webvisit.view(), browser: await web.status() }),
   'POST /api/web/config': async (_q, b) => {
     // 只收 web 这一段，别的字段一律不认 —— 避免又出现「保存时把整份 config 写回去」那种串味
-    const patch = b?.web && typeof b.web === 'object' ? b.web : b;
+    const patch = b?.web && typeof b.web === 'object' ? { ...b.web } : { ...b };
+    // 以前「逛逛」页多包了一层，整份设置被存进了 web.web、页面上怎么改都不生效。再收到这种就拆开
+    if (patch.web && typeof patch.web === 'object') Object.assign(patch, patch.web);
+    delete patch.web;
     writeConfig({ web: patch });
     return webvisit.view();
   },

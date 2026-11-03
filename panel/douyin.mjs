@@ -809,6 +809,7 @@ export async function likeVideo(vid, on = true, { throttle: t = throttle } = {})
  * 截图整页交回去，让用户直接扫 —— 比找二维码 canvas 再抠图稳得多。
  */
 export async function loginQr({ keep = false } = {}) {
+  await forgetStaleLogin();
   const page = await openPageImpl(HOT_URL);
   let ok = false;
   try {
@@ -905,6 +906,27 @@ export async function hasSessionCookie() {
   const c = await browser();
   const { cookies } = await c.send('Storage.getCookies');
   return hasSession(cookies);
+}
+
+/**
+ * 没有登录 cookie、页面却还以为自己登着 —— 这时点「登录」只会走已登录的分支，登录框永远不弹。
+ * 实测：换浏览器后旧 cookie 解不开（钥匙串不同），localStorage 里的用户信息还在，就是这个样子。
+ * 登录 cookie 本来就没了，清掉站点的本地存储不会丢任何东西；设备类 cookie 留着，少撞验证。
+ * Storage.clearDataForOrigin 得在页面会话里调：在 browser 级连接上调一律 Internal error。
+ */
+async function forgetStaleLogin() {
+  let page = null;
+  try {
+    if (await hasSessionCookie()) return;
+    page = await openPageImpl('');
+    for (const origin of ['https://www.douyin.com', 'https://douyin.com']) {
+      await page.send('Storage.clearDataForOrigin', {
+        origin,
+        storageTypes: 'local_storage,indexeddb,service_workers,cache_storage',
+      });
+    }
+  } catch { /* 浏览器都起不来的话，下面开页面时会报真正的错 */ }
+  finally { await page?.close().catch(() => {}); }
 }
 
 /** 给外面用的常量，免得面板里硬编码域名 */

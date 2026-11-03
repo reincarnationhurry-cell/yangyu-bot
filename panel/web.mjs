@@ -111,7 +111,12 @@ function saveModePref(m) {
 
 /** 连上（必要时先把浏览器拉起来），返回 browser 级的 CDP 连接 */
 export async function browser() {
-  if (conn && !conn.closed) return conn;
+  if (conn && !conn.closed) {
+    if (conn.headless === !wantWindow()) return conn;
+    // 「显示浏览器窗口」刚改过：常驻连接也得换，不然要等这个实例自己退了才生效 ——
+    // 扫码后要在网页上验证那一步，号主照着提示打开窗口、点「换一张」，结果还是看不见
+    await shutdown();
+  }
   if (connecting) return connecting;
   connecting = (async () => {
     // 已经开着的浏览器直接复用 —— 但有没有窗口得跟现在的设置对得上，
